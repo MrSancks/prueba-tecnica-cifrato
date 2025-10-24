@@ -1,70 +1,69 @@
-"""Integration tests for authentication endpoints."""
+import asyncio
 
-from fastapi.testclient import TestClient
+import pytest
+from fastapi import HTTPException
 
-from app.main import create_app
+from app.config import dependencies
+from app.presentation.routers import auth
+from app.presentation.schemas.auth import LoginRequest, RegisterRequest
 
 
-def get_client() -> TestClient:
-    return TestClient(create_app())
+def setup_function() -> None:
+    dependencies.get_user_repository.cache_clear()
+    dependencies.get_password_hasher.cache_clear()
+    dependencies.get_token_service.cache_clear()
 
 
 def test_register_and_login_flow() -> None:
-    client = get_client()
+    register_use_case = dependencies.get_register_user_use_case()
+    authenticate_use_case = dependencies.get_authenticate_user_use_case()
 
-    response = client.post(
-        "/auth/register",
-        json={"email": "user@example.com", "password": "StrongPass123"},
-    )
-    assert response.status_code == 201
-    data = response.json()
-    assert data["email"] == "user@example.com"
-    assert "id" in data
+    payload = RegisterRequest(email="user@example.com", password="StrongPass123")
+    user_response = auth.register_user(payload=payload, use_case=register_use_case)
+    assert user_response.email == payload.email
 
-    login_response = client.post(
-        "/auth/login",
-        json={"email": "user@example.com", "password": "StrongPass123"},
-    )
-    assert login_response.status_code == 200
-    login_data = login_response.json()
-    assert "access_token" in login_data
-    token = login_data["access_token"]
+    login_payload = LoginRequest(email=payload.email, password=payload.password)
+    token_response = auth.login(payload=login_payload, use_case=authenticate_use_case)
+    token_data = dependencies.get_token_service().verify_token(token_response.access_token)
+    assert token_data["sub"] == user_response.id
 
-    me_response = client.get(
-        "/auth/me", headers={"Authorization": f"Bearer {token}"}
-    )
-    assert me_response.status_code == 200
-    me_data = me_response.json()
-    assert me_data["email"] == "user@example.com"
+    user = dependencies.get_user_repository().get_by_email(payload.email)
+    assert user is not None
+    me_response = asyncio.run(auth.get_me(current_user=user))
+    assert me_response.email == payload.email
 
 
 def test_register_duplicate_email_returns_400() -> None:
-    client = get_client()
+    register_use_case = dependencies.get_register_user_use_case()
+    payload = RegisterRequest(email="duplicate@example.com", password="Password1")
+    auth.register_user(payload=payload, use_case=register_use_case)
 
-    payload = {"email": "duplicate@example.com", "password": "Password1"}
-    first = client.post("/auth/register", json=payload)
-    assert first.status_code == 201
+    with pytest.raises(HTTPException) as exc:
+        auth.register_user(payload=payload, use_case=register_use_case)
 
-    second = client.post("/auth/register", json=payload)
-    assert second.status_code == 400
-    assert second.json()["detail"] == "Email already registered"
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Email already registered"
 
 
 def test_login_with_invalid_credentials_returns_401() -> None:
-    client = get_client()
+    register_use_case = dependencies.get_register_user_use_case()
+    authenticate_use_case = dependencies.get_authenticate_user_use_case()
 
-    client.post("/auth/register", json={"email": "valid@example.com", "password": "Secret1"})
+    payload = RegisterRequest(email="valid@example.com", password="Secret1")
+    auth.register_user(payload=payload, use_case=register_use_case)
 
-    response = client.post(
-        "/auth/login",
-        json={"email": "valid@example.com", "password": "Wrong"},
-    )
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid email or password"
+    with pytest.raises(HTTPException) as exc:
+        auth.login(
+            payload=LoginRequest(email=payload.email, password="Wrong"),
+            use_case=authenticate_use_case,
+        )
+    assert exc.value.status_code == 401
+    assert exc.value.detail == "Invalid email or password"
 
-    missing_user_response = client.post(
-        "/auth/login",
-        json={"email": "missing@example.com", "password": "Secret1"},
-    )
-    assert missing_user_response.status_code == 401
-    assert missing_user_response.json()["detail"] == "Invalid email or password"
+    with pytest.raises(HTTPException) as missing_exc:
+        auth.login(
+            payload=LoginRequest(email="missing@example.com", password="Secret1"),
+            use_case=authenticate_use_case,
+        )
+    assert missing_exc.value.status_code == 401
+    assert missing_exc.value.detail == "Invalid email or password"

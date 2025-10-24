@@ -1,5 +1,4 @@
-"""Domain entities and value objects for the billing platform."""
-
+from .invoices import Invoice, InvoiceLine
 from .users import User
 
-__all__ = ["User"]
+__all__ = ["Invoice", "InvoiceLine", "User"]

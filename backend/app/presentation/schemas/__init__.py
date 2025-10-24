@@ -1,5 +1,11 @@
-"""Pydantic schemas exposed by the presentation layer."""
-
 from .auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+from .invoices import InvoiceLineResponse, InvoiceResponse
 
-__all__ = ["LoginRequest", "RegisterRequest", "TokenResponse", "UserResponse"]
+__all__ = [
+    "LoginRequest",
+    "RegisterRequest",
+    "TokenResponse",
+    "UserResponse",
+    "InvoiceLineResponse",
+    "InvoiceResponse",
+]

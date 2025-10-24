@@ -1,5 +1,3 @@
-"""JWT token service implementation."""
-
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -7,8 +5,6 @@ from jose import JWTError, jwt
 
 
 class JWTTokenService:
-    """Service responsible for issuing and verifying JWT tokens."""
-
     def __init__(self, secret_key: str, algorithm: str = "HS256", expires_minutes: int = 60) -> None:
         self._secret_key = secret_key
         self._algorithm = algorithm

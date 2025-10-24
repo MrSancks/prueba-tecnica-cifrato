@@ -1,11 +1,7 @@
-"""Password hashing services."""
-
 from passlib.context import CryptContext
 
 
 class BcryptPasswordHasher:
-    """Password hashing using Passlib's bcrypt context."""
-
     def __init__(self) -> None:
         self._context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 

@@ -1,5 +1,3 @@
-"""Security dependencies for FastAPI routers."""
-
 from __future__ import annotations
 
 from typing import Annotated
@@ -16,7 +14,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
 ) -> User:
-    """Validate the Authorization header and return the current user."""
+    """Valida el token Bearer y retorna el usuario autenticado."""
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 

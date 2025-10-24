@@ -1,5 +1,3 @@
-"""In-memory implementation of the user repository."""
-
 from __future__ import annotations
 
 from collections.abc import Iterable
@@ -9,8 +7,6 @@ from app.domain import User
 
 
 class InMemoryUserRepository:
-    """Simple in-memory storage for user entities."""
-
     def __init__(self) -> None:
         self._users_by_id: Dict[str, User] = {}
         self._users_by_email: Dict[str, User] = {}
@@ -27,7 +23,6 @@ class InMemoryUserRepository:
         self._users_by_email[normalized_email] = user
 
     def list_all(self) -> Iterable[User]:
-        """Return all stored users (primarily for testing)."""
         return self._users_by_id.values()
 
 
