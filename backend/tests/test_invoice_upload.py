@@ -17,6 +17,7 @@ from app.presentation.routers import invoices
 def setup_function() -> None:
     dependencies.get_invoice_repository.cache_clear()
     dependencies.get_invoice_parser.cache_clear()
+    dependencies.get_ai_suggestion_repository.cache_clear()
 
 
 def read_sample_xml() -> bytes:

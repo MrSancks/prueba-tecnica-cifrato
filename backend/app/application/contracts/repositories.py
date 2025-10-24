@@ -24,3 +24,11 @@ class InvoiceRepository(Protocol):
 
     def find_by_owner_and_external_id(self, owner_id: str, external_id: str) -> object | None:
         ...
+
+
+class AISuggestionRepository(Protocol):
+    def list_for_invoice(self, invoice_id: str) -> list[object]:
+        ...
+
+    def replace_for_invoice(self, invoice_id: str, suggestions: list[object]) -> None:
+        ...

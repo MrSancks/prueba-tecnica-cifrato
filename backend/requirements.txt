@@ -1,3 +1,8 @@
 fastapi
 uvicorn[standard]
 pytest
+passlib[bcrypt]
+python-jose
+lxml
+python-multipart
+httpx

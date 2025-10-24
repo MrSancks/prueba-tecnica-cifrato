@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from app.domain import Invoice, InvoiceLine
+from app.domain import AISuggestion, Invoice, InvoiceLine
 
 
 class InvoiceLineResponse(BaseModel):
@@ -53,4 +53,35 @@ class InvoiceResponse(BaseModel):
             tax_amount=invoice.tax_amount,
             original_filename=invoice.original_filename,
             lines=[InvoiceLineResponse.from_domain(line) for line in invoice.lines],
+        )
+
+
+class AISuggestionResponse(BaseModel):
+    account_code: str
+    rationale: str
+    confidence: float
+
+    @classmethod
+    def from_domain(cls, suggestion: AISuggestion) -> "AISuggestionResponse":
+        return cls(
+            account_code=suggestion.account_code,
+            rationale=suggestion.rationale,
+            confidence=suggestion.confidence,
+        )
+
+
+class AccountingSuggestionsResponse(BaseModel):
+    invoice_id: str
+    suggestions: list[AISuggestionResponse]
+
+    @classmethod
+    def from_domain(
+        cls,
+        *,
+        invoice_id: str,
+        suggestions: list[AISuggestion],
+    ) -> "AccountingSuggestionsResponse":
+        return cls(
+            invoice_id=invoice_id,
+            suggestions=[AISuggestionResponse.from_domain(item) for item in suggestions],
         )

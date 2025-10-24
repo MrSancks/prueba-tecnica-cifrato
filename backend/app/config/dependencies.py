@@ -1,27 +1,42 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 
-from app.application.use_cases import AuthenticateUser, RegisterUser, UploadInvoice
+from app.application.use_cases import (
+    AuthenticateUser,
+    GenerateAccountingSuggestions,
+    RegisterUser,
+    UploadInvoice,
+)
 from app.infrastructure import (
     BcryptPasswordHasher,
+    InMemoryAISuggestionRepository,
     InMemoryInvoiceRepository,
     InMemoryUserRepository,
     JWTTokenService,
+    OllamaAISuggestionService,
     UBLInvoiceParser,
 )
 
 
 @dataclass(slots=True)
 class Settings:
-    secret_key: str = "insecure-development-secret"
-    token_expire_minutes: int = 60
+    secret_key: str
+    token_expire_minutes: int
+    ai_base_url: str
+    ai_model: str
 
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings(
+        secret_key=os.getenv("SECRET_KEY", "insecure-development-secret"),
+        token_expire_minutes=int(os.getenv("TOKEN_EXPIRE_MINUTES", "60")),
+        ai_base_url=os.getenv("AI_BASE_URL", "http://ollama:11434"),
+        ai_model=os.getenv("AI_MODEL", "phi3"),
+    )
 
 
 @lru_cache
@@ -32,6 +47,11 @@ def get_user_repository() -> InMemoryUserRepository:
 @lru_cache
 def get_invoice_repository() -> InMemoryInvoiceRepository:
     return InMemoryInvoiceRepository()
+
+
+@lru_cache
+def get_ai_suggestion_repository() -> InMemoryAISuggestionRepository:
+    return InMemoryAISuggestionRepository()
 
 
 @lru_cache
@@ -53,6 +73,15 @@ def get_invoice_parser() -> UBLInvoiceParser:
     return UBLInvoiceParser()
 
 
+@lru_cache
+def get_ai_suggestion_service() -> OllamaAISuggestionService:
+    settings = get_settings()
+    return OllamaAISuggestionService(
+        base_url=settings.ai_base_url,
+        model=settings.ai_model,
+    )
+
+
 def get_register_user_use_case() -> RegisterUser:
     return RegisterUser(
         user_repository=get_user_repository(),
@@ -72,4 +101,12 @@ def get_upload_invoice_use_case() -> UploadInvoice:
     return UploadInvoice(
         invoice_repository=get_invoice_repository(),
         invoice_parser=get_invoice_parser(),
+    )
+
+
+def get_generate_accounting_suggestions_use_case() -> GenerateAccountingSuggestions:
+    return GenerateAccountingSuggestions(
+        invoice_repository=get_invoice_repository(),
+        suggestion_repository=get_ai_suggestion_repository(),
+        ai_service=get_ai_suggestion_service(),
     )

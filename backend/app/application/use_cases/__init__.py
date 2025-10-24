@@ -1,4 +1,9 @@
 from .auth import AuthenticateUser, RegisterUser
-from .invoices import UploadInvoice
+from .invoices import GenerateAccountingSuggestions, UploadInvoice
 
-__all__ = ["AuthenticateUser", "RegisterUser", "UploadInvoice"]
+__all__ = [
+    "AuthenticateUser",
+    "RegisterUser",
+    "GenerateAccountingSuggestions",
+    "UploadInvoice",
+]
