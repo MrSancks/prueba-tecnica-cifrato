@@ -1,3 +1,11 @@
-"""Infrastructure implementations for repositories and external services."""
+"""Infrastructure implementations for repositories and services."""
 
-__all__: list[str] = []
+from .repositories.in_memory_users import InMemoryUserRepository
+from .services.password import BcryptPasswordHasher
+from .services.token import JWTTokenService
+
+__all__ = [
+    "InMemoryUserRepository",
+    "BcryptPasswordHasher",
+    "JWTTokenService",
+]
