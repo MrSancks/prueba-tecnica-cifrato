@@ -8,11 +8,14 @@ from app.application.use_cases import (
     AuthenticateUser,
     ExportInvoicesToExcel,
     GenerateAccountingSuggestions,
+    GetInvoiceDetail,
+    ListInvoices,
     RegisterUser,
     UploadInvoice,
 )
 from app.infrastructure import (
     BcryptPasswordHasher,
+    FirebaseAdminUnavailable,
     InMemoryAISuggestionRepository,
     InMemoryInvoiceRepository,
     InMemoryUserRepository,
@@ -20,6 +23,8 @@ from app.infrastructure import (
     OllamaAISuggestionService,
     SpreadsheetInvoiceWorkbookBuilder,
     UBLInvoiceParser,
+    firebase_project_id,
+    initialize_firebase_app,
 )
 
 
@@ -29,15 +34,20 @@ class Settings:
     token_expire_minutes: int
     ai_base_url: str
     ai_model: str
+    firebase_credentials_defined: bool
 
 
 @lru_cache
 def get_settings() -> Settings:
+    firebase_credentials_defined = bool(
+        os.getenv("FIREBASE_CREDENTIALS_PATH") or os.getenv("FIREBASE_CREDENTIALS_JSON")
+    )
     return Settings(
         secret_key=os.getenv("SECRET_KEY", "insecure-development-secret"),
         token_expire_minutes=int(os.getenv("TOKEN_EXPIRE_MINUTES", "60")),
         ai_base_url=os.getenv("AI_BASE_URL", "http://ollama:11434"),
         ai_model=os.getenv("AI_MODEL", "phi3"),
+        firebase_credentials_defined=firebase_credentials_defined,
     )
 
 
@@ -89,6 +99,30 @@ def get_invoice_workbook_builder() -> SpreadsheetInvoiceWorkbookBuilder:
     return SpreadsheetInvoiceWorkbookBuilder()
 
 
+@lru_cache
+def get_firebase_app():
+    settings = get_settings()
+    if not settings.firebase_credentials_defined:
+        return None
+
+    try:
+        return initialize_firebase_app()
+    except FirebaseAdminUnavailable:
+        return None
+
+
+@lru_cache
+def get_firebase_project_id() -> str | None:
+    settings = get_settings()
+    if not settings.firebase_credentials_defined:
+        return None
+
+    try:
+        return firebase_project_id()
+    except FirebaseAdminUnavailable:
+        return None
+
+
 def get_register_user_use_case() -> RegisterUser:
     return RegisterUser(
         user_repository=get_user_repository(),
@@ -124,4 +158,18 @@ def get_export_invoices_use_case() -> ExportInvoicesToExcel:
         invoice_repository=get_invoice_repository(),
         suggestion_repository=get_ai_suggestion_repository(),
         workbook_builder=get_invoice_workbook_builder(),
+    )
+
+
+def get_list_invoices_use_case() -> ListInvoices:
+    return ListInvoices(
+        invoice_repository=get_invoice_repository(),
+        suggestion_repository=get_ai_suggestion_repository(),
+    )
+
+
+def get_invoice_detail_use_case() -> GetInvoiceDetail:
+    return GetInvoiceDetail(
+        invoice_repository=get_invoice_repository(),
+        suggestion_repository=get_ai_suggestion_repository(),
     )

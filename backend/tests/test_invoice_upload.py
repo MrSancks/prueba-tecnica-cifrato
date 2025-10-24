@@ -94,3 +94,5 @@ async def test_upload_invoice_router_returns_invoice_response() -> None:
     assert response.external_id
     assert response.lines
     assert response.currency == "COP"
+    assert response.status == "pendiente"
+    assert isinstance(response.taxes, list)

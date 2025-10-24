@@ -2,6 +2,8 @@ from .auth import AuthenticateUser, RegisterUser
 from .invoices import (
     ExportInvoicesToExcel,
     GenerateAccountingSuggestions,
+    GetInvoiceDetail,
+    ListInvoices,
     UploadInvoice,
 )
 
@@ -10,5 +12,7 @@ __all__ = [
     "RegisterUser",
     "ExportInvoicesToExcel",
     "GenerateAccountingSuggestions",
+    "GetInvoiceDetail",
+    "ListInvoices",
     "UploadInvoice",
 ]

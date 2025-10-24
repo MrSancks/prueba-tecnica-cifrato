@@ -202,3 +202,46 @@ class ExportInvoicesToExcel:
         }
         return self.workbook_builder.build(ordered, suggestions_map)
 
+
+@dataclass(slots=True)
+class InvoiceListItem:
+    invoice: Invoice
+    status: str
+
+
+@dataclass(slots=True)
+class InvoiceDetailItem:
+    invoice: Invoice
+    status: str
+
+
+@dataclass(slots=True)
+class ListInvoices:
+    invoice_repository: InvoiceRepository
+    suggestion_repository: AISuggestionRepository
+
+    def execute(self, *, owner_id: str) -> list[InvoiceListItem]:
+        invoices = self.invoice_repository.list_for_user(owner_id)
+        ordered = sorted(invoices, key=lambda item: item.issue_date, reverse=True)
+        result: list[InvoiceListItem] = []
+        for invoice in ordered:
+            suggestions = self.suggestion_repository.list_for_invoice(invoice.id)
+            status = "procesada" if suggestions else "pendiente"
+            result.append(InvoiceListItem(invoice=invoice, status=status))
+        return result
+
+
+@dataclass(slots=True)
+class GetInvoiceDetail:
+    invoice_repository: InvoiceRepository
+    suggestion_repository: AISuggestionRepository
+
+    def execute(self, *, owner_id: str, invoice_id: str) -> InvoiceDetailItem:
+        invoice = self.invoice_repository.get_by_id(invoice_id)
+        if invoice is None or invoice.owner_id != owner_id:
+            raise InvoiceNotFoundError("La factura no existe para el usuario indicado")
+
+        suggestions = self.suggestion_repository.list_for_invoice(invoice.id)
+        status = "procesada" if suggestions else "pendiente"
+        return InvoiceDetailItem(invoice=invoice, status=status)
+

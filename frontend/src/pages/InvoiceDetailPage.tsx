@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppHeader } from '../components/AppHeader';
@@ -10,8 +11,14 @@ export function InvoiceDetailPage() {
   const { invoiceId } = useParams<{ invoiceId: string }>();
   const { token } = useAuth();
   const queryClient = useQueryClient();
+  const [feedback, setFeedback] = useState<{ tone: 'error' | 'success'; text: string } | null>(null);
 
-  const { data: invoice, isLoading } = useQuery({
+  const {
+    data: invoice,
+    isLoading,
+    isError,
+    error
+  } = useQuery({
     queryKey: ['invoice', invoiceId],
     queryFn: async () => {
       if (!token || !invoiceId) {
@@ -41,7 +48,25 @@ export function InvoiceDetailPage() {
           ← Volver al listado
         </Link>
 
-        {isLoading || !invoice ? (
+        {feedback && (
+          <div
+            className={
+              feedback.tone === 'error'
+                ? 'rounded border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700'
+                : 'rounded border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700'
+            }
+          >
+            {feedback.text}
+          </div>
+        )}
+
+        {isError ? (
+          <p className="text-sm text-red-600">
+            {error instanceof Error
+              ? `No se pudo recuperar la factura: ${error.message}`
+              : 'No se pudo recuperar la factura solicitada.'}
+          </p>
+        ) : isLoading || !invoice ? (
           <p className="text-sm text-slate-500">Cargando factura…</p>
         ) : (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
@@ -105,6 +130,11 @@ export function InvoiceDetailPage() {
                 </div>
               </article>
             </section>
+            {suggestionsQuery.isError && (
+              <p className="text-sm text-red-600">
+                No se pudieron cargar las sugerencias iniciales. Puedes intentar recalcularlas manualmente.
+              </p>
+            )}
             <SuggestionPanel
               suggestions={suggestionsQuery.data ?? []}
               invoiceTotal={invoice.total}
@@ -114,8 +144,14 @@ export function InvoiceDetailPage() {
                 if (!token || !invoiceId) {
                   return;
                 }
-                await requestSuggestions(token, invoiceId);
-                await queryClient.invalidateQueries({ queryKey: ['suggestions', invoiceId] });
+                try {
+                  await requestSuggestions(token, invoiceId);
+                  await queryClient.invalidateQueries({ queryKey: ['suggestions', invoiceId] });
+                  setFeedback({ tone: 'success', text: 'Se recalcularon las sugerencias contables.' });
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : 'No fue posible recalcular las sugerencias.';
+                  setFeedback({ tone: 'error', text: message });
+                }
               }}
             />
           </div>
