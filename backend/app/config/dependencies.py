@@ -6,6 +6,7 @@ from functools import lru_cache
 
 from app.application.use_cases import (
     AuthenticateUser,
+    ExportInvoicesToExcel,
     GenerateAccountingSuggestions,
     RegisterUser,
     UploadInvoice,
@@ -17,6 +18,7 @@ from app.infrastructure import (
     InMemoryUserRepository,
     JWTTokenService,
     OllamaAISuggestionService,
+    SpreadsheetInvoiceWorkbookBuilder,
     UBLInvoiceParser,
 )
 
@@ -82,6 +84,11 @@ def get_ai_suggestion_service() -> OllamaAISuggestionService:
     )
 
 
+@lru_cache
+def get_invoice_workbook_builder() -> SpreadsheetInvoiceWorkbookBuilder:
+    return SpreadsheetInvoiceWorkbookBuilder()
+
+
 def get_register_user_use_case() -> RegisterUser:
     return RegisterUser(
         user_repository=get_user_repository(),
@@ -109,4 +116,12 @@ def get_generate_accounting_suggestions_use_case() -> GenerateAccountingSuggesti
         invoice_repository=get_invoice_repository(),
         suggestion_repository=get_ai_suggestion_repository(),
         ai_service=get_ai_suggestion_service(),
+    )
+
+
+def get_export_invoices_use_case() -> ExportInvoicesToExcel:
+    return ExportInvoicesToExcel(
+        invoice_repository=get_invoice_repository(),
+        suggestion_repository=get_ai_suggestion_repository(),
+        workbook_builder=get_invoice_workbook_builder(),
     )

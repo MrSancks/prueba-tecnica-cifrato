@@ -11,25 +11,28 @@ from app.domain import User
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
-) -> User:
-    """Valida el token Bearer y retorna el usuario autenticado."""
-    if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-
+def resolve_user_from_token(token: str) -> User | None:
     token_service = get_token_service()
     try:
-        payload = token_service.verify_token(credentials.credentials)
-    except ValueError as exc:  # pragma: no cover - narrow scope
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
+        payload = token_service.verify_token(token)
+    except ValueError:
+        return None
 
     subject = payload.get("sub")
     if subject is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        return None
 
     user_repository = get_user_repository()
-    user = user_repository.get_by_id(subject)
+    return user_repository.get_by_id(subject)
+
+
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
+) -> User:
+    if credentials is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+    user = resolve_user_from_token(credentials.credentials)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
 

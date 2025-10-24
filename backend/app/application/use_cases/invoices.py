@@ -6,7 +6,11 @@ from app.application.contracts.repositories import (
     AISuggestionRepository,
     InvoiceRepository,
 )
-from app.application.contracts.services import AISuggestionService, InvoiceParser
+from app.application.contracts.services import (
+    AISuggestionService,
+    InvoiceParser,
+    InvoiceWorkbookBuilder,
+)
 from app.domain import AISuggestion, Invoice
 
 
@@ -19,6 +23,10 @@ class InvalidInvoicePayloadError(RuntimeError):
 
 
 class InvoiceNotFoundError(RuntimeError):
+    pass
+
+
+class NoInvoicesToExportError(RuntimeError):
     pass
 
 
@@ -174,3 +182,23 @@ class GenerateAccountingSuggestions:
             seen.add(key)
             combined.append(suggestion)
         return combined
+
+
+@dataclass(slots=True)
+class ExportInvoicesToExcel:
+    invoice_repository: InvoiceRepository
+    suggestion_repository: AISuggestionRepository
+    workbook_builder: InvoiceWorkbookBuilder
+
+    def execute(self, *, owner_id: str) -> bytes:
+        invoices = self.invoice_repository.list_for_user(owner_id)
+        if not invoices:
+            raise NoInvoicesToExportError("No hay facturas para exportar")
+
+        ordered = sorted(invoices, key=lambda item: item.issue_date)
+        suggestions_map = {
+            invoice.id: self.suggestion_repository.list_for_invoice(invoice.id)
+            for invoice in ordered
+        }
+        return self.workbook_builder.build(ordered, suggestions_map)
+

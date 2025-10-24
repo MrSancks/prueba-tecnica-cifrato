@@ -25,3 +25,12 @@ class AISuggestionService(Protocol):
 class InvoiceParser(Protocol):
     def parse(self, xml_bytes: bytes) -> dict[str, object]:
         ...
+
+
+class InvoiceWorkbookBuilder(Protocol):
+    def build(
+        self,
+        invoices: list[object],
+        suggestions_map: dict[str, list[object]],
+    ) -> bytes:
+        ...

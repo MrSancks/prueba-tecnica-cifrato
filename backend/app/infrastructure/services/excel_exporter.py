@@ -1,0 +1,304 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from io import BytesIO
+from typing import Iterable
+from xml.sax.saxutils import escape
+from zipfile import ZIP_DEFLATED, ZipFile
+
+from app.domain import AISuggestion, Invoice
+
+try:  # pragma: no cover - dependencia opcional
+    import pandas as pd  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - degradación controlada
+    pd = None  # type: ignore[assignment]
+
+
+@dataclass(slots=True)
+class SpreadsheetInvoiceWorkbookBuilder:
+    engine: str = "openpyxl"
+
+    def build(
+        self,
+        invoices: list[Invoice],
+        suggestions_map: dict[str, list[AISuggestion]],
+    ) -> bytes:
+        if pd is not None:
+            return self._build_with_pandas(invoices, suggestions_map)
+        return self._build_with_minimal_writer(invoices, suggestions_map)
+
+    def _build_with_pandas(
+        self,
+        invoices: list[Invoice],
+        suggestions_map: dict[str, list[AISuggestion]],
+    ) -> bytes:
+        buffer = BytesIO()
+
+        resumen_rows = [
+            {
+                "Factura interna": invoice.id,
+                "Consecutivo externo": invoice.external_id,
+                "Fecha": invoice.issue_date,
+                "Proveedor": invoice.supplier_name,
+                "NIT proveedor": invoice.supplier_tax_id,
+                "Cliente": invoice.customer_name,
+                "NIT cliente": invoice.customer_tax_id,
+                "Moneda": invoice.currency,
+                "Subtotal": float(invoice.total_amount - invoice.tax_amount),
+                "Impuestos": float(invoice.tax_amount),
+                "Total": float(invoice.total_amount),
+            }
+            for invoice in invoices
+        ]
+
+        line_rows = list(self._build_lines_rows(invoices))
+        suggestion_rows = list(self._build_suggestions_rows(invoices, suggestions_map))
+
+        with pd.ExcelWriter(buffer, engine=self.engine) as writer:  # type: ignore[arg-type]
+            pd.DataFrame(resumen_rows).to_excel(writer, sheet_name="Resumen", index=False)  # type: ignore[call-arg]
+            pd.DataFrame(line_rows).to_excel(writer, sheet_name="Lineas", index=False)  # type: ignore[call-arg]
+            pd.DataFrame(suggestion_rows).to_excel(writer, sheet_name="Asientos", index=False)  # type: ignore[call-arg]
+
+        return buffer.getvalue()
+
+    def _build_with_minimal_writer(
+        self,
+        invoices: list[Invoice],
+        suggestions_map: dict[str, list[AISuggestion]],
+    ) -> bytes:
+        resumen_sheet = [
+            [
+                "Factura interna",
+                "Consecutivo externo",
+                "Fecha",
+                "Proveedor",
+                "NIT proveedor",
+                "Cliente",
+                "NIT cliente",
+                "Moneda",
+                "Subtotal",
+                "Impuestos",
+                "Total",
+            ]
+        ]
+        for invoice in invoices:
+            subtotal = invoice.total_amount - invoice.tax_amount
+            resumen_sheet.append(
+                [
+                    invoice.id,
+                    invoice.external_id,
+                    invoice.issue_date.isoformat(),
+                    invoice.supplier_name,
+                    invoice.supplier_tax_id,
+                    invoice.customer_name,
+                    invoice.customer_tax_id,
+                    invoice.currency,
+                    float(subtotal),
+                    float(invoice.tax_amount),
+                    float(invoice.total_amount),
+                ]
+            )
+
+        line_sheet = [
+            [
+                "Factura interna",
+                "Consecutivo externo",
+                "ID línea",
+                "Descripción",
+                "Cantidad",
+                "Precio unitario",
+                "Subtotal",
+            ]
+        ]
+        for row in self._build_lines_rows(invoices):
+            line_sheet.append(
+                [
+                    row["Factura interna"],
+                    row["Consecutivo externo"],
+                    row["ID línea"],
+                    row["Descripción"],
+                    row["Cantidad"],
+                    row["Precio unitario"],
+                    row["Subtotal"],
+                ]
+            )
+
+        suggestion_sheet = [
+            [
+                "Factura interna",
+                "Consecutivo externo",
+                "Cuenta",
+                "Justificación",
+                "Confianza",
+            ]
+        ]
+        for row in self._build_suggestions_rows(invoices, suggestions_map):
+            suggestion_sheet.append(
+                [
+                    row["Factura interna"],
+                    row["Consecutivo externo"],
+                    row["Cuenta"],
+                    row["Justificación"],
+                    row["Confianza"],
+                ]
+            )
+
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        buffer = BytesIO()
+        with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
+            archive.writestr("[Content_Types].xml", self._content_types_xml())
+            archive.writestr("_rels/.rels", self._rels_xml())
+            archive.writestr("docProps/core.xml", self._core_xml(timestamp))
+            archive.writestr("docProps/app.xml", self._app_xml())
+            archive.writestr("xl/_rels/workbook.xml.rels", self._workbook_rels_xml())
+            archive.writestr("xl/workbook.xml", self._workbook_xml())
+            archive.writestr("xl/styles.xml", self._styles_xml())
+            archive.writestr("xl/worksheets/sheet1.xml", self._sheet_xml(resumen_sheet))
+            archive.writestr("xl/worksheets/sheet2.xml", self._sheet_xml(line_sheet))
+            archive.writestr("xl/worksheets/sheet3.xml", self._sheet_xml(suggestion_sheet))
+
+        return buffer.getvalue()
+
+    def _build_lines_rows(self, invoices: Iterable[Invoice]) -> Iterable[dict[str, object]]:
+        for invoice in invoices:
+            for line in invoice.lines:
+                yield {
+                    "Factura interna": invoice.id,
+                    "Consecutivo externo": invoice.external_id,
+                    "ID línea": line.line_id,
+                    "Descripción": line.description,
+                    "Cantidad": float(line.quantity),
+                    "Precio unitario": float(line.unit_price),
+                    "Subtotal": float(line.line_extension_amount),
+                }
+
+    def _build_suggestions_rows(
+        self,
+        invoices: Iterable[Invoice],
+        suggestions_map: dict[str, list[AISuggestion]],
+    ) -> Iterable[dict[str, object]]:
+        for invoice in invoices:
+            for suggestion in suggestions_map.get(invoice.id, []):
+                yield {
+                    "Factura interna": invoice.id,
+                    "Consecutivo externo": invoice.external_id,
+                    "Cuenta": suggestion.account_code,
+                    "Justificación": suggestion.rationale,
+                    "Confianza": float(suggestion.confidence),
+                }
+
+    def _sheet_xml(self, rows: list[list[object]]) -> str:
+        body: list[str] = []
+        for row_index, row in enumerate(rows, start=1):
+            cells: list[str] = []
+            for column_index, value in enumerate(row, start=1):
+                cell_ref = f"{self._column_letter(column_index)}{row_index}"
+                if self._is_number(value):
+                    cells.append(f'<c r="{cell_ref}"><v>{value}</v></c>')
+                else:
+                    text = "" if value is None else escape(str(value))
+                    cells.append(
+                        f'<c r="{cell_ref}" t="inlineStr"><is><t>{text}</t></is></c>'
+                    )
+            body.append(f"<row r=\"{row_index}\">{''.join(cells)}</row>")
+
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+            f"<sheetData>{''.join(body)}</sheetData>"
+            "</worksheet>"
+        )
+
+    def _content_types_xml(self) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">"
+            "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>"
+            "<Default Extension=\"xml\" ContentType=\"application/xml\"/>"
+            "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
+            "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+            "<Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+            "<Override PartName=\"/xl/worksheets/sheet3.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+            "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>"
+            "<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>"
+            "<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>"
+            "</Types>"
+        )
+
+    def _rels_xml(self) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/>"
+            "</Relationships>"
+        )
+
+    def _workbook_xml(self) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
+            "<sheets>"
+            "<sheet name=\"Resumen\" sheetId=\"1\" r:id=\"rId1\"/>"
+            "<sheet name=\"Lineas\" sheetId=\"2\" r:id=\"rId2\"/>"
+            "<sheet name=\"Asientos\" sheetId=\"3\" r:id=\"rId3\"/>"
+            "</sheets>"
+            "</workbook>"
+        )
+
+    def _workbook_rels_xml(self) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+            "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>"
+            "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>"
+            "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/>"
+            "<Relationship Id=\"rId4\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
+            "</Relationships>"
+        )
+
+    def _styles_xml(self) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">"
+            "<fonts count=\"1\"><font><sz val=\"11\"/><color theme=\"1\"/><name val=\"Calibri\"/></font></fonts>"
+            "<fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills>"
+            "<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>"
+            "<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>"
+            "<cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>"
+            "</styleSheet>"
+        )
+
+    def _core_xml(self, timestamp: str) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:dcterms=\"http://purl.org/dc/terms/\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">"
+            "<dc:creator>Cifrato Backend</dc:creator>"
+            "<cp:lastModifiedBy>Cifrato Backend</cp:lastModifiedBy>"
+            f"<dcterms:created xsi:type=\"dcterms:W3CDTF\">{timestamp}</dcterms:created>"
+            f"<dcterms:modified xsi:type=\"dcterms:W3CDTF\">{timestamp}</dcterms:modified>"
+            "</cp:coreProperties>"
+        )
+
+    def _app_xml(self) -> str:
+        return (
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\" xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\">"
+            "<Application>Python</Application>"
+            "</Properties>"
+        )
+
+    def _column_letter(self, index: int) -> str:
+        result = ""
+        while index:
+            index, remainder = divmod(index - 1, 26)
+            result = chr(65 + remainder) + result
+        return result or "A"
+
+    def _is_number(self, value: object) -> bool:
+        if isinstance(value, (int, float)):
+            return True
+        if isinstance(value, Decimal):
+            return True
+        return False

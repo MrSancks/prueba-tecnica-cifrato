@@ -7,6 +7,7 @@ from .services import (
     BcryptPasswordHasher,
     JWTTokenService,
     OllamaAISuggestionService,
+    SpreadsheetInvoiceWorkbookBuilder,
     UBLInvoiceParser,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "BcryptPasswordHasher",
     "JWTTokenService",
     "OllamaAISuggestionService",
+    "SpreadsheetInvoiceWorkbookBuilder",
     "UBLInvoiceParser",
 ]

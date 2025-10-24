@@ -5,13 +5,13 @@ from app.config.dependencies import (
     get_authenticate_user_use_case,
     get_register_user_use_case,
 )
-from app.config.security import CurrentUser
 from app.presentation.schemas.auth import (
     LoginRequest,
     RegisterRequest,
     TokenResponse,
     UserResponse,
 )
+from app.presentation.dependencies.security import AuthenticatedUser
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,5 +45,5 @@ def login(
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: CurrentUser):
+async def get_me(current_user: AuthenticatedUser):
     return UserResponse.model_validate(current_user, from_attributes=True)
