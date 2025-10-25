@@ -2,7 +2,8 @@ import axios from 'axios';
 import { AISuggestion, InvoiceDetail, InvoiceSummary } from '../types/invoice';
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE ?? 'http://localhost:8000'
+  // import.meta.env typing may not be available in this environment; cast to any to avoid TS errors
+  baseURL: (import.meta as any).env?.VITE_API_BASE ?? 'http://localhost:8000'
 });
 
 interface LoginResponse {
@@ -52,6 +53,10 @@ interface SuggestionResponse {
   account_code: string;
   rationale: string;
   confidence: number;
+  source?: string;
+  generated_at?: string;
+  is_selected?: boolean;
+  line_number?: number | null;
 }
 
 interface SuggestionsEnvelope {
@@ -98,8 +103,26 @@ function mapSuggestion(payload: SuggestionResponse): AISuggestion {
   return {
     accountCode: payload.account_code,
     rationale: payload.rationale,
-    confidence: payload.confidence
+    confidence: payload.confidence,
+    source: payload.source,
+    generatedAt: payload.generated_at,
+    isSelected: Boolean(payload.is_selected),
+    lineNumber: payload.line_number ?? null
   };
+}
+
+export async function selectSuggestion(
+  token: string,
+  invoiceId: string,
+  lineNumber: number,
+  accountCode: string
+): Promise<void> {
+  // PUT /invoices/{invoice_id}/suggest/{line_number}/select?account_code={code}
+  await api.put(
+    `/invoices/${invoiceId}/suggest/${lineNumber}/select?account_code=${encodeURIComponent(accountCode)}`,
+    {},
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
 }
 
 export async function loginRequest(email: string, password: string): Promise<LoginResponse> {
@@ -130,10 +153,17 @@ export async function fetchInvoiceDetail(token: string, invoiceId: string): Prom
 
 export async function uploadInvoice(token: string, file: File): Promise<InvoiceDetail> {
   const formData = new FormData();
-  formData.append('file', file);
+  const xmlFile =
+    file.type === 'application/xml'
+      ? file
+      : new File([file], file.name || 'invoice.xml', { type: 'application/xml' });
+  formData.append('file', xmlFile, xmlFile.name);
 
   const response = await api.post<InvoiceDetailResponse>('/invoices/upload', formData, {
-    headers: { Authorization: `Bearer ${token}` }
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'multipart/form-data'
+    }
   });
 
   return mapInvoiceDetail(response.data);
@@ -141,6 +171,14 @@ export async function uploadInvoice(token: string, file: File): Promise<InvoiceD
 
 export async function requestSuggestions(token: string, invoiceId: string): Promise<AISuggestion[]> {
   const response = await api.get<SuggestionsEnvelope>(`/invoices/${invoiceId}/suggest`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return (response.data.suggestions ?? []).map(mapSuggestion);
+}
+
+export async function regenSuggestions(token: string, invoiceId: string): Promise<AISuggestion[]> {
+  // POST to the suggest endpoint should trigger regeneration on the backend
+  const response = await api.post<SuggestionsEnvelope>(`/invoices/${invoiceId}/suggest`, {}, {
     headers: { Authorization: `Bearer ${token}` }
   });
   return (response.data.suggestions ?? []).map(mapSuggestion);

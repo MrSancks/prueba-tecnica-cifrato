@@ -27,4 +27,8 @@ export interface AISuggestion {
   accountCode: string;
   rationale: string;
   confidence: number;
+  source?: string;
+  generatedAt?: string;
+  isSelected?: boolean;
+  lineNumber?: number | null;
 }

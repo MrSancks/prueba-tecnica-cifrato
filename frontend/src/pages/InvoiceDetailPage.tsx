@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppHeader } from '../components/AppHeader';
 import { SuggestionPanel } from '../components/SuggestionPanel';
 import { useAuth } from '../hooks/useAuth';
-import { fetchInvoiceDetail, requestSuggestions } from '../services/apiClient';
+import { fetchInvoiceDetail, requestSuggestions, regenSuggestions, selectSuggestion } from '../services/apiClient';
 import { formatCurrency } from '../services/formatters';
 
 export function InvoiceDetailPage() {
@@ -129,31 +129,78 @@ export function InvoiceDetailPage() {
                   </ul>
                 </div>
               </article>
-            </section>
-            {suggestionsQuery.isError && (
-              <p className="text-sm text-red-600">
-                No se pudieron cargar las sugerencias iniciales. Puedes intentar recalcularlas manualmente.
-              </p>
-            )}
-            <SuggestionPanel
-              suggestions={suggestionsQuery.data ?? []}
-              invoiceTotal={invoice.total}
-              currency={invoice.currency}
-              isRefreshing={suggestionsQuery.isRefetching}
-              onRefresh={async () => {
-                if (!token || !invoiceId) {
-                  return;
-                }
-                try {
-                  await requestSuggestions(token, invoiceId);
-                  await queryClient.invalidateQueries({ queryKey: ['suggestions', invoiceId] });
-                  setFeedback({ tone: 'success', text: 'Se recalcularon las sugerencias contables.' });
-                } catch (err) {
-                  const message = err instanceof Error ? err.message : 'No fue posible recalcular las sugerencias.';
-                  setFeedback({ tone: 'error', text: message });
-                }
-              }}
-            />
+
+                {/* Suggestion selection row: moved under the invoice summary as a horizontal list */}
+                <SuggestionPanel
+                  suggestions={suggestionsQuery.data ?? []}
+                  invoiceTotal={invoice.total}
+                  currency={invoice.currency}
+                  horizontal
+                  onSelect={async (lineNumber: number, accountCode: string) => {
+                    if (!token || !invoiceId) return;
+                    try {
+                      await selectSuggestion(token, invoiceId, lineNumber, accountCode);
+                      await queryClient.invalidateQueries({ queryKey: ['suggestions', invoiceId] });
+                      setFeedback({ tone: 'success', text: 'Sugerencia seleccionada.' });
+                    } catch (err) {
+                      const message = err instanceof Error ? err.message : 'No fue posible seleccionar la sugerencia.';
+                      setFeedback({ tone: 'error', text: message });
+                    }
+                  }}
+                />
+              </section>
+
+              {/* Right column: show only the selected suggestion and the Recalcular button */}
+              <aside>
+                {suggestionsQuery.isError && (
+                  <p className="text-sm text-red-600">
+                    No se pudieron cargar las sugerencias iniciales. Puedes intentar recalcularlas manualmente.
+                  </p>
+                )}
+
+                <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-base font-semibold text-slate-900">Sugerencia seleccionada</h2>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!token || !invoiceId) return;
+                        try {
+                          await regenSuggestions(token, invoiceId);
+                          await queryClient.invalidateQueries({ queryKey: ['suggestions', invoiceId] });
+                          setFeedback({ tone: 'success', text: 'Se recalcularon las sugerencias contables.' });
+                        } catch (err) {
+                          const message = err instanceof Error ? err.message : 'No fue posible recalcular las sugerencias.';
+                          setFeedback({ tone: 'error', text: message });
+                        }
+                      }}
+                      disabled={suggestionsQuery.isRefetching}
+                      className="rounded bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                    >
+                      {suggestionsQuery.isRefetching ? 'Recalculando…' : 'Recalcular'}
+                    </button>
+                  </div>
+
+                  <div className="mt-4">
+                    {(() => {
+                      const selected = (suggestionsQuery.data ?? []).find((s) => s.isSelected);
+                      if (!selected) {
+                        return <p className="text-sm text-slate-500">No se ha escogido ninguna.</p>;
+                      }
+                      return (
+                        <div className="rounded border border-slate-100 p-3">
+                          <p className="text-sm font-semibold text-slate-900">{selected.accountCode}</p>
+                          <p className="mt-1 text-sm text-slate-600">{selected.rationale}</p>
+                          <p className="mt-2 text-xs uppercase text-slate-500">Confianza: {(selected.confidence * 100).toFixed(0)}%</p>
+                          {selected.lineNumber != null && (
+                            <p className="mt-1 text-xs text-slate-500">Línea #{selected.lineNumber}</p>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </aside>
           </div>
         )}
       </main>
