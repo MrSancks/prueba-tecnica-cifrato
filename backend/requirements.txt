@@ -1,8 +1,11 @@
 fastapi
 uvicorn[standard]
 pytest
-passlib[bcrypt]
+bcrypt==4.0.1
+passlib==1.7.4
 python-jose
 lxml
 python-multipart
 httpx
+firebase-admin
+google-generativeai

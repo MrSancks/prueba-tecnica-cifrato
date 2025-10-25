@@ -1,0 +1,146 @@
+{
+  "clase": "4",
+  "nombre": "Ingresos",
+  "grupos": [
+    {
+      "codigo": "41",
+      "nombre": "Operacionales",
+      "cuentas": [
+        {
+          "codigo": "4105",
+          "nombre": "Agricultura, ganadería, caza y silvicultura"
+        },
+        {
+          "codigo": "4110",
+          "nombre": "Pesca"
+        },
+        {
+          "codigo": "4115",
+          "nombre": "Explotación de minas y canteras"
+        },
+        {
+          "codigo": "4120",
+          "nombre": "Industrias manufactureras"
+        },
+        {
+          "codigo": "4125",
+          "nombre": "Suministro de electricidad, gas y agua"
+        },
+        {
+          "codigo": "4130",
+          "nombre": "Construcción"
+        },
+        {
+          "codigo": "4135",
+          "nombre": "Comercio al por mayor y al por menor"
+        },
+        {
+          "codigo": "4140",
+          "nombre": "Hoteles y restaurantes"
+        },
+        {
+          "codigo": "4145",
+          "nombre": "Transporte, almacenamiento y comunicaciones"
+        },
+        {
+          "codigo": "4150",
+          "nombre": "Actividad financiera"
+        },
+        {
+          "codigo": "4155",
+          "nombre": "Actividades inmobiliarias, empresariales y de alquiler"
+        },
+        {
+          "codigo": "4160",
+          "nombre": "Enseñanza"
+        },
+        {
+          "codigo": "4165",
+          "nombre": "Servicios sociales y de salud"
+        },
+        {
+          "codigo": "4170",
+          "nombre": "Otras actividades de servicios comunitarios, sociales y personales"
+        },
+        {
+          "codigo": "4175",
+          "nombre": "Devoluciones en ventas (DB)"
+        }
+      ]
+    },
+    {
+      "codigo": "42",
+      "nombre": "No operacionales",
+      "cuentas": [
+        {
+          "codigo": "4205",
+          "nombre": "Otras ventas"
+        },
+        {
+          "codigo": "4210",
+          "nombre": "Financieros"
+        },
+        {
+          "codigo": "4215",
+          "nombre": "Dividendos y participaciones"
+        },
+        {
+          "codigo": "4218",
+          "nombre": "Ingresos método de participación"
+        },
+        {
+          "codigo": "4220",
+          "nombre": "Arrendamientos"
+        },
+        {
+          "codigo": "4225",
+          "nombre": "Comisiones"
+        },
+        {
+          "codigo": "4230",
+          "nombre": "Honorarios"
+        },
+        {
+          "codigo": "4235",
+          "nombre": "Servicios"
+        },
+        {
+          "codigo": "4240",
+          "nombre": "Utilidad en venta de inversiones"
+        },
+        {
+          "codigo": "4245",
+          "nombre": "Utilidad en venta de propiedades, planta y equipo"
+        },
+        {
+          "codigo": "4248",
+          "nombre": "Utilidad en venta de otros bienes"
+        },
+        {
+          "codigo": "4250",
+          "nombre": "Recuperaciones"
+        },
+        {
+          "codigo": "4255",
+          "nombre": "Indemnizaciones"
+        },
+        {
+          "codigo": "4260",
+          "nombre": "Participaciones en concesiones"
+        },
+        {
+          "codigo": "4265",
+          "nombre": "Ingresos de ejercicios anteriores"
+        },
+        {
+          "codigo": "4275",
+          "nombre": "Devoluciones en otras ventas (DB)"
+        },
+        {
+          "codigo": "4295",
+          "nombre": "Diversos"
+        }
+      ]
+    }
+  ]
+}
