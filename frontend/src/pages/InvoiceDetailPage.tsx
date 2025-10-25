@@ -4,7 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppHeader } from '../components/AppHeader';
 import { SuggestionPanel } from '../components/SuggestionPanel';
 import { useAuth } from '../hooks/useAuth';
-import { fetchInvoiceDetail, requestSuggestions, regenSuggestions, selectSuggestion } from '../services/apiClient';
+import { fetchInvoiceDetail, requestSuggestions, regenSuggestions } from '../services/apiClient';
 import { formatCurrency } from '../services/formatters';
 
 export function InvoiceDetailPage() {
@@ -130,27 +130,13 @@ export function InvoiceDetailPage() {
                 </div>
               </article>
 
-                {/* Suggestion selection row: moved under the invoice summary as a horizontal list */}
-                <SuggestionPanel
-                  suggestions={suggestionsQuery.data ?? []}
-                  invoiceTotal={invoice.total}
-                  currency={invoice.currency}
-                  horizontal
-                  onSelect={async (lineNumber: number, accountCode: string) => {
-                    if (!token || !invoiceId) return;
-                    try {
-                      await selectSuggestion(token, invoiceId, lineNumber, accountCode);
-                      await queryClient.invalidateQueries({ queryKey: ['suggestions', invoiceId] });
-                      setFeedback({ tone: 'success', text: 'Sugerencia seleccionada.' });
-                    } catch (err) {
-                      const message = err instanceof Error ? err.message : 'No fue posible seleccionar la sugerencia.';
-                      setFeedback({ tone: 'error', text: message });
-                    }
-                  }}
-                />
-              </section>
-
-              {/* Right column: show only the selected suggestion and the Recalcular button */}
+              <SuggestionPanel
+                suggestions={suggestionsQuery.data ?? []}
+                invoiceTotal={invoice.total}
+                currency={invoice.currency}
+                horizontal
+              />
+            </section>              {/* Right column: show only the selected suggestion and the Recalcular button */}
               <aside>
                 {suggestionsQuery.isError && (
                   <p className="text-sm text-red-600">
@@ -160,7 +146,7 @@ export function InvoiceDetailPage() {
 
                 <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
                   <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-slate-900">Sugerencia seleccionada</h2>
+                    <h2 className="text-base font-semibold text-slate-900">Sugerencia principal</h2>
                     <button
                       type="button"
                       onClick={async () => {
@@ -183,18 +169,16 @@ export function InvoiceDetailPage() {
 
                   <div className="mt-4">
                     {(() => {
-                      const selected = (suggestionsQuery.data ?? []).find((s) => s.isSelected);
-                      if (!selected) {
-                        return <p className="text-sm text-slate-500">No se ha escogido ninguna.</p>;
+                      const sorted = [...(suggestionsQuery.data ?? [])].sort((a, b) => b.confidence - a.confidence);
+                      const topSuggestion = sorted[0];
+                      if (!topSuggestion) {
+                        return <p className="text-sm text-slate-500">No hay sugerencias disponibles.</p>;
                       }
                       return (
                         <div className="rounded border border-slate-100 p-3">
-                          <p className="text-sm font-semibold text-slate-900">{selected.accountCode}</p>
-                          <p className="mt-1 text-sm text-slate-600">{selected.rationale}</p>
-                          <p className="mt-2 text-xs uppercase text-slate-500">Confianza: {(selected.confidence * 100).toFixed(0)}%</p>
-                          {selected.lineNumber != null && (
-                            <p className="mt-1 text-xs text-slate-500">Línea #{selected.lineNumber}</p>
-                          )}
+                          <p className="text-sm font-semibold text-slate-900">{topSuggestion.accountCode}</p>
+                          <p className="mt-1 text-sm text-slate-600">{topSuggestion.rationale}</p>
+                          <p className="mt-2 text-xs uppercase text-slate-500">Confianza: {(topSuggestion.confidence * 100).toFixed(0)}%</p>
                         </div>
                       );
                     })()}

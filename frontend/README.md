@@ -2,15 +2,38 @@
 
 SPA en React y TypeScript que consume el backend de FastAPI para completar el flujo autenticación → carga de XML → sugerencias IA → exportación de reportes. Todo el contenido se valida con las facturas reales almacenadas en `../backend/app/assessment-files/`.
 
-## Requisitos
+## Instrucciones para ejecutar el proyecto localmente
+
+### Requisitos
 - Node.js 18+
 - npm 9+
 
-## Configuración local
-1. Instalar dependencias: `npm install`.
-2. Crear `.env.local` con `VITE_API_BASE=http://localhost:8000`.
-3. Ejecutar `npm run dev` para iniciar el servidor de desarrollo.
-4. Ejecutar `npm run build` y `npm run preview` para validar la compilación de producción.
+### Pasos de configuración
+
+1. **Instalar dependencias**
+   ```bash
+   npm install
+   ```
+
+2. **Configurar variables de entorno**
+   
+   Crear un archivo `.env.local` en la raíz del directorio `frontend/` con el siguiente contenido:
+   ```
+   VITE_API_BASE=http://localhost:8000
+   ```
+
+3. **Ejecutar el servidor de desarrollo**
+   ```bash
+   npm run dev
+   ```
+   
+   La aplicación estará disponible en `http://localhost:5173`
+
+4. **Compilar para producción (opcional)**
+   ```bash
+   npm run build
+   npm run preview
+   ```
 
 ## Política de docstrings
 La política general del repositorio aplica también aquí: solo se documentan con comentarios las funciones auxiliares críticas y siempre en español cuando sea estrictamente necesario.

@@ -131,31 +131,6 @@ async def regenerate_suggestions(
     return AccountingSuggestionsResponse.from_domain(invoice_id=invoice_id, suggestions=suggestions)
 
 
-@router.put("/{invoice_id}/suggest/{line_number}/select")
-async def select_suggestion(
-    invoice_id: str,
-    line_number: int,
-    account_code: str,
-    current_user: AuthenticatedUser,
-    detail_use_case=Depends(get_invoice_detail_use_case),
-):
-    """
-    Marca una sugerencia específica como seleccionada por el usuario.
-    """
-    try:
-        # Verificar que la factura existe y pertenece al usuario
-        detail_use_case.execute(owner_id=current_user.id, invoice_id=invoice_id)
-    except InvoiceNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    
-    # Actualizar selección
-    from app.config.dependencies import get_ai_suggestion_repository
-    suggestion_repo = get_ai_suggestion_repository()
-    suggestion_repo.select_suggestion(invoice_id, line_number, account_code)
-    
-    return {"status": "ok", "message": "Sugerencia seleccionada exitosamente"}
-
-
 @router.get("/{invoice_id}", response_model=InvoiceDetailResponse)
 async def get_invoice(
     invoice_id: str,

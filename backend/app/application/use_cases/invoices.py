@@ -83,8 +83,11 @@ class GenerateAccountingSuggestions:
         if invoice is None or invoice.owner_id != owner_id:
             raise InvoiceNotFoundError("La factura no existe para el usuario indicado")
 
-        # Prioridad 1: Intentar generar con IA
-        ai_payload = self.ai_service.generate_suggestions(self._serialize_invoice(invoice))
+        # Prioridad 1: Intentar generar con IA (pasando owner_id para PUC personalizado)
+        ai_payload = self.ai_service.generate_suggestions(
+            self._serialize_invoice(invoice),
+            owner_id=owner_id
+        )
         ai_suggestions = self._coerce_ai_suggestions(ai_payload)
         
         # Si IA generó sugerencias, usarlas
@@ -139,6 +142,7 @@ class GenerateAccountingSuggestions:
         """
         Convierte la respuesta raw de la IA en objetos AISuggestion.
         Soporta tanto formato agregado como por línea.
+        Ahora incluye puc_account_id y account_name de las cuentas PUC personalizadas.
         """
         suggestions: list[AISuggestion] = []
         for item in raw:
@@ -160,6 +164,10 @@ class GenerateAccountingSuggestions:
             except (TypeError, ValueError):
                 confidence = 0.5
             
+            # Extraer campos nuevos del PUC personalizado
+            puc_account_id = str(item.get("puc_account_id", "")).strip() or None
+            account_name = str(item.get("account_name", "")).strip() or None
+            
             suggestions.append(
                 AISuggestion(
                     account_code=code,
@@ -167,7 +175,8 @@ class GenerateAccountingSuggestions:
                     confidence=confidence,
                     source="ai",
                     line_number=int(line_number) if line_number else None,
-                    is_selected=False,
+                    puc_account_id=puc_account_id,
+                    account_name=account_name,
                 )
             )
         return suggestions
@@ -202,43 +211,10 @@ class ExportInvoicesToExcel:
 
         ordered = sorted(invoices, key=lambda item: item.issue_date)
         suggestions_map = {
-            invoice.id: self._get_or_auto_select_suggestion(invoice.id)
+            invoice.id: self.suggestion_repository.list_for_invoice(invoice.id)
             for invoice in ordered
         }
         return self.workbook_builder.build(ordered, suggestions_map)
-    
-    def _get_or_auto_select_suggestion(self, invoice_id: str) -> list[AISuggestion]:
-        """
-        Para cada factura:
-        1. Si tiene sugerencia seleccionada, usar esa
-        2. Si no, auto-seleccionar la de mayor confianza
-        3. En caso de empate en confianza, elegir la más clara (rationale más corto)
-        """
-        suggestions = self.suggestion_repository.list_for_invoice(invoice_id)
-        
-        if not suggestions:
-            return []
-        
-        # Verificar si ya hay una seleccionada
-        selected = [s for s in suggestions if s.is_selected]
-        if selected:
-            return selected
-        
-        # Auto-seleccionar: mayor confianza
-        max_confidence = max(s.confidence for s in suggestions)
-        top_candidates = [s for s in suggestions if s.confidence == max_confidence]
-        
-        if len(top_candidates) == 1:
-            # Una ganadora clara
-            winner = top_candidates[0]
-        else:
-            # Empate en confianza: elegir la más clara (rationale más corto y específico)
-            top_candidates.sort(key=lambda s: len(s.rationale))
-            winner = top_candidates[0]
-        
-        # Marcar como seleccionada (para la próxima exportación)
-        # Nota: Esto es opcional - podríamos solo usarla sin persistir la selección
-        return [winner]
 
 
 @dataclass(slots=True)

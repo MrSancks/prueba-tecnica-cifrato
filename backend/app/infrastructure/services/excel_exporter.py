@@ -37,11 +37,11 @@ class SpreadsheetInvoiceWorkbookBuilder:
     ) -> bytes:
         buffer = BytesIO()
 
-        # Hoja 1: Resumen con factura + sugerencias PUC
+        # Hoja 1: Resumen con datos generales de factura (sin PUC)
         resumen_rows = list(self._build_resumen_rows(invoices, suggestions_map))
         
-        # Hoja 2: Productos (líneas de detalle)
-        productos_rows = list(self._build_lines_rows(invoices))
+        # Hoja 2: Productos con sus códigos PUC específicos por línea
+        productos_rows = list(self._build_lines_rows(invoices, suggestions_map))
 
         with pd.ExcelWriter(buffer, engine=self.engine) as writer:  # type: ignore[arg-type]
             pd.DataFrame(resumen_rows).to_excel(writer, sheet_name="Resumen", index=False)  # type: ignore[call-arg]
@@ -54,10 +54,9 @@ class SpreadsheetInvoiceWorkbookBuilder:
         invoices: list[Invoice],
         suggestions_map: dict[str, list[AISuggestion]],
     ) -> bytes:
-        # Hoja 1: Resumen
+        # Hoja 1: Resumen (sin PUC)
         resumen_sheet = [
             [
-                "Factura interna",
                 "Consecutivo externo",
                 "Fecha",
                 "Proveedor",
@@ -68,15 +67,11 @@ class SpreadsheetInvoiceWorkbookBuilder:
                 "Subtotal",
                 "Impuestos",
                 "Total",
-                "Código PUC",
-                "Justificación",
-                "Confianza",
             ]
         ]
         for row in self._build_resumen_rows(invoices, suggestions_map):
             resumen_sheet.append(
                 [
-                    row["Factura interna"],
                     row["Consecutivo externo"],
                     row["Fecha"],
                     row["Proveedor"],
@@ -87,34 +82,35 @@ class SpreadsheetInvoiceWorkbookBuilder:
                     row["Subtotal"],
                     row["Impuestos"],
                     row["Total"],
-                    row["Código PUC"],
-                    row["Justificación"],
-                    row["Confianza"],
                 ]
             )
 
-        # Hoja 2: Productos
+        # Hoja 2: Productos (con PUC por línea)
         productos_sheet = [
             [
-                "Factura interna",
                 "Consecutivo externo",
                 "ID producto",
                 "Descripción",
                 "Cantidad",
                 "Precio unitario",
                 "Subtotal",
+                "Código PUC",
+                "Justificación",
+                "Confianza",
             ]
         ]
-        for row in self._build_lines_rows(invoices):
+        for row in self._build_lines_rows(invoices, suggestions_map):
             productos_sheet.append(
                 [
-                    row["Factura interna"],
                     row["Consecutivo externo"],
                     row["ID producto"],
                     row["Descripción"],
                     row["Cantidad"],
                     row["Precio unitario"],
                     row["Subtotal"],
+                    row["Código PUC"],
+                    row["Justificación"],
+                    row["Confianza"],
                 ]
             )
 
@@ -139,18 +135,13 @@ class SpreadsheetInvoiceWorkbookBuilder:
         suggestions_map: dict[str, list[AISuggestion]],
     ) -> Iterable[dict[str, object]]:
         """
-        Combina datos de factura con sugerencias PUC seleccionadas.
-        Una fila por factura con su código PUC.
+        Datos generales de factura sin códigos PUC.
+        Los códigos PUC ahora van en la hoja de productos.
         """
         for invoice in invoices:
             subtotal = invoice.total_amount - invoice.tax_amount
             
-            # Buscar la sugerencia seleccionada para esta factura
-            suggestions = suggestions_map.get(invoice.id, [])
-            selected = next((s for s in suggestions if s.is_selected), None)
-            
             yield {
-                "Factura interna": invoice.id,
                 "Consecutivo externo": invoice.external_id,
                 "Fecha": invoice.issue_date.isoformat(),
                 "Proveedor": invoice.supplier_name,
@@ -161,22 +152,40 @@ class SpreadsheetInvoiceWorkbookBuilder:
                 "Subtotal": float(subtotal),
                 "Impuestos": float(invoice.tax_amount),
                 "Total": float(invoice.total_amount),
-                "Código PUC": selected.account_code if selected else "",
-                "Justificación": selected.rationale if selected else "",
-                "Confianza": float(selected.confidence) if selected else 0.0,
             }
 
-    def _build_lines_rows(self, invoices: Iterable[Invoice]) -> Iterable[dict[str, object]]:
+    def _build_lines_rows(
+        self, 
+        invoices: Iterable[Invoice],
+        suggestions_map: dict[str, list[AISuggestion]],
+    ) -> Iterable[dict[str, object]]:
+        """
+        Productos con sus respectivas sugerencias PUC según line_number.
+        """
         for invoice in invoices:
-            for line in invoice.lines:
+            suggestions = suggestions_map.get(invoice.id, [])
+            
+            for idx, line in enumerate(invoice.lines, start=1):
+                # Buscar sugerencia para esta línea específica
+                line_suggestions = [s for s in suggestions if s.line_number == idx]
+                
+                # Ordenar por confianza y tomar la mejor
+                if line_suggestions:
+                    line_suggestions.sort(key=lambda s: s.confidence, reverse=True)
+                    suggestion = line_suggestions[0]
+                else:
+                    suggestion = None
+                
                 yield {
-                    "Factura interna": invoice.id,
                     "Consecutivo externo": invoice.external_id,
                     "ID producto": line.line_id,
                     "Descripción": line.description,
                     "Cantidad": float(line.quantity),
                     "Precio unitario": float(line.unit_price),
                     "Subtotal": float(line.line_extension_amount),
+                    "Código PUC": suggestion.account_code if suggestion else "",
+                    "Justificación": suggestion.rationale if suggestion else "",
+                    "Confianza": float(suggestion.confidence) if suggestion else 0.0,
                 }
 
     def _sheet_xml(self, rows: list[list[object]]) -> str:

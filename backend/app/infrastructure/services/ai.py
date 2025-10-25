@@ -20,12 +20,13 @@ class GeminiAISuggestionService:
     Servicio de sugerencias contables usando Google Generative AI (Gemini).
     - Modelo por defecto: gemini-2.5-flash
     - Requiere variable de entorno GEMINI_API_KEY (o pasar api_key)
+    - Usa el PUC personalizado del repositorio por owner_id
     - Devuelve: list[dict[str, object]] con campos sugeridos por línea
     """
     api_key: str
+    puc_repository: Any = None  # PUCRepository
     model_name: str = "gemini-2.5-flash"
     _initialized: bool = False
-    _puc_ingresos: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if genai is None or not self.api_key:
@@ -37,43 +38,109 @@ class GeminiAISuggestionService:
             genai.configure(api_key=self.api_key)
             self._initialized = True
             logger.info(f"Gemini configurado exitosamente. Modelo: {self.model_name}")
-            
-            # Cargar PUC de ingresos
-            self._load_puc_ingresos()
         except Exception as e:
             # No lanzamos excepciones: el servicio fallará en silencio devolviendo []
             logger.error(f"Error al configurar Gemini: {e}")
             self._initialized = False
     
-    def _load_puc_ingresos(self) -> None:
-        """Carga el catálogo de códigos PUC de ingresos (clase 4)"""
+    def _get_puc_for_owner(self, owner_id: str) -> list[dict[str, Any]]:
+        """
+        Obtiene el PUC personalizado del owner desde el repositorio.
+        Si no tiene PUC cargado, usa el fallback del puc_ingresos.json.
+        
+        Returns: Lista de diccionarios con id, codigo, nombre, categoria, clase
+        """
+        if not self.puc_repository:
+            logger.warning("⚠️ No hay repositorio PUC configurado, usando fallback")
+            return self._load_puc_fallback()
+        
+        try:
+            # Obtener todas las cuentas del owner
+            accounts, total = self.puc_repository.list_by_owner(
+                owner_id=owner_id,
+                search=None,
+                limit=10000,
+                offset=0,
+            )
+            
+            if not accounts:
+                logger.warning(f"⚠️ Owner {owner_id} no tiene PUC cargado, usando fallback")
+                return self._load_puc_fallback()
+            
+            # Convertir a formato simple para el prompt - INCLUIR ID
+            puc_data = [
+                {
+                    "id": acc.id,  # ID de Firestore para referencia posterior
+                    "codigo": acc.codigo,
+                    "nombre": acc.nombre,
+                    "categoria": acc.categoria,
+                    "clase": acc.clase,
+                    "nivel_agrupacion": acc.nivel_agrupacion,
+                }
+                for acc in accounts
+            ]
+            
+            logger.info(f"✅ Cargadas {len(puc_data)} cuentas PUC personalizadas para owner {owner_id}")
+            return puc_data
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo PUC del repositorio: {e}")
+            return self._load_puc_fallback()
+    
+    def _load_puc_fallback(self) -> list[dict[str, Any]]:
+        """Carga el PUC fallback desde puc_ingresos.json"""
         try:
             puc_path = Path(__file__).parent.parent.parent.parent / "puc_ingresos.json"
             if puc_path.exists():
                 with open(puc_path, 'r', encoding='utf-8') as f:
-                    self._puc_ingresos = json.load(f)
-                logger.info("✅ Catálogo PUC de ingresos cargado")
+                    data = json.load(f)
+                logger.info("✅ Catálogo PUC de ingresos fallback cargado")
+                
+                # Convertir formato del JSON a lista plana
+                accounts = []
+                for grupo in data.get("grupos", []):
+                    for cuenta in grupo.get("cuentas", []):
+                        accounts.append({
+                            "codigo": cuenta.get("codigo", ""),
+                            "nombre": cuenta.get("nombre", ""),
+                            "categoria": "Ingresos",
+                            "clase": "Ingresos",
+                            "nivel_agrupacion": "Transaccional",
+                        })
+                return accounts
             else:
                 logger.warning(f"⚠️ No se encontró puc_ingresos.json en {puc_path}")
+                return []
         except Exception as e:
-            logger.error(f"❌ Error cargando PUC de ingresos: {e}")
+            logger.error(f"❌ Error cargando PUC fallback: {e}")
+            return []
 
     # ------------------ API PÚBLICA ------------------
 
-    def generate_suggestions(self, invoice_payload: dict[str, object]) -> list[dict[str, object]]:
+    def generate_suggestions(
+        self, 
+        invoice_payload: dict[str, object],
+        owner_id: str | None = None,
+    ) -> list[dict[str, object]]:
         """
         Genera sugerencias contables por línea de factura.
+        Usa el PUC personalizado del owner si está disponible.
         Retorna [] si no puede generar/parsear.
+        
+        Args:
+            invoice_payload: Datos de la factura
+            owner_id: ID del propietario para obtener su PUC personalizado
         """
         logger.info("Iniciando generación de sugerencias con Gemini")
         logger.info(f"   _initialized: {self._initialized}")
         logger.info(f"   genai disponible: {genai is not None}")
+        logger.info(f"   owner_id: {owner_id}")
         
         if genai is None or not self._initialized:
             logger.warning("Gemini no inicializado o SDK no disponible")
             return []
 
-        prompt = self._build_prompt(invoice_payload)
+        prompt = self._build_prompt(invoice_payload, owner_id)
         if not prompt:
             logger.warning("Prompt vacío, no se puede generar sugerencias")
             return []
@@ -208,9 +275,10 @@ class GeminiAISuggestionService:
             logger.debug(f"Contenido que falló: {s[:200]}...")
             return None
 
-    def _build_prompt(self, invoice_payload: dict[str, object]) -> str:
+    def _build_prompt(self, invoice_payload: dict[str, object], owner_id: str | None = None) -> str:
         """
         Construye el prompt para analizar la factura y producir un array JSON de sugerencias.
+        Usa el PUC personalizado del owner si está disponible.
         """
         supplier = self._safe_dict(invoice_payload.get("supplier"))
         customer = self._safe_dict(invoice_payload.get("customer"))
@@ -220,6 +288,14 @@ class GeminiAISuggestionService:
             return ""
 
         logger.info(f"Construyendo prompt para {len(lines)} líneas")
+        
+        # Obtener PUC personalizado del owner
+        puc_accounts = []
+        if owner_id:
+            puc_accounts = self._get_puc_for_owner(owner_id)
+        else:
+            logger.warning("⚠️ No se proporcionó owner_id, usando PUC fallback")
+            puc_accounts = self._load_puc_fallback()
 
         summary: list[str] = [
             "Eres un experto contador colombiano especializado en el Plan Único de Cuentas (PUC).",
@@ -227,7 +303,7 @@ class GeminiAISuggestionService:
             "CONTEXTO: Factura Electrónica de Venta según DIAN 2.1 (UBL 2.1)",
             "Perfil: DIAN 2.1: Factura Electrónica de Venta",
             "",
-            "TAREA: Analiza cada línea de venta y asigna el código PUC de INGRESOS (clase 4) de 4 DÍGITOS más apropiado.",
+            "TAREA: Analiza cada línea de venta y asigna el código PUC más apropiado del catálogo personalizado de la empresa.",
             "",
             f"Vendedor: {supplier.get('name', 'N/A')} - NIT: {supplier.get('tax_id', 'N/A')}",
             f"Cliente: {customer.get('name', 'N/A')} - NIT: {customer.get('tax_id', 'N/A')}",
@@ -245,66 +321,32 @@ class GeminiAISuggestionService:
             quantity = line.get("quantity", 1)
             summary.append(f'{idx}. "{description}" - ${self._fmt_amount(amount)} (x{quantity})')
 
-        # Agregar catálogo PUC desde el JSON
+        # Agregar catálogo PUC personalizado
         summary.extend([
             "",
             "═══════════════════════════════════════════════════════════════",
-            "CATÁLOGO PUC COLOMBIANO - CLASE 4: INGRESOS (solo usar estos códigos)",
+            "CATÁLOGO PUC PERSONALIZADO DE LA EMPRESA (solo usar estos códigos)",
             "═══════════════════════════════════════════════════════════════",
             "",
         ])
 
-        if self._puc_ingresos and isinstance(self._puc_ingresos, dict):
-            for grupo in self._puc_ingresos.get("grupos", []):
-                grupo_codigo = grupo.get("codigo", "")
-                grupo_nombre = grupo.get("nombre", "")
-                summary.append(f"GRUPO {grupo_codigo} - {grupo_nombre.upper()}:")
-                summary.append("")
-                
-                for cuenta in grupo.get("cuentas", []):
-                    codigo = cuenta.get("codigo", "")
-                    nombre = cuenta.get("nombre", "")
-                    summary.append(f"  {codigo}: {nombre}")
-                
-                summary.append("")
+        if puc_accounts:
+            logger.info(f"📋 Agregando {len(puc_accounts)} cuentas PUC al prompt")
+            
+            # Crear un JSON compacto con todas las cuentas
+            summary.append("A continuación, el CATÁLOGO COMPLETO de cuentas PUC en formato JSON:")
+            summary.append("```json")
+            
+            # Formatear como JSON compacto
+            import json
+            puc_json = json.dumps(puc_accounts, ensure_ascii=False, indent=2)
+            summary.append(puc_json)
+            summary.append("```")
+            summary.append("")
         else:
-            # Fallback si no se cargó el JSON
             summary.extend([
-                "GRUPO 41 - OPERACIONALES:",
-                "  4105: Agricultura, ganadería, caza y silvicultura",
-                "  4110: Pesca",
-                "  4115: Explotación de minas y canteras",
-                "  4120: Industrias manufactureras",
-                "  4125: Suministro de electricidad, gas y agua",
-                "  4130: Construcción",
-                "  4135: Comercio al por mayor y al por menor",
-                "  4140: Hoteles y restaurantes",
-                "  4145: Transporte, almacenamiento y comunicaciones",
-                "  4150: Actividad financiera",
-                "  4155: Actividades inmobiliarias, empresariales y de alquiler",
-                "  4160: Enseñanza",
-                "  4165: Servicios sociales y de salud",
-                "  4170: Otras actividades de servicios comunitarios, sociales y personales",
-                "  4175: Devoluciones en ventas (DB)",
-                "",
-                "GRUPO 42 - NO OPERACIONALES:",
-                "  4205: Otras ventas",
-                "  4210: Financieros",
-                "  4215: Dividendos y participaciones",
-                "  4218: Ingresos método de participación",
-                "  4220: Arrendamientos",
-                "  4225: Comisiones",
-                "  4230: Honorarios",
-                "  4235: Servicios",
-                "  4240: Utilidad en venta de inversiones",
-                "  4245: Utilidad en venta de propiedades, planta y equipo",
-                "  4248: Utilidad en venta de otros bienes",
-                "  4250: Recuperaciones",
-                "  4255: Indemnizaciones",
-                "  4260: Participaciones en concesiones",
-                "  4265: Ingresos de ejercicios anteriores",
-                "  4275: Devoluciones en otras ventas (DB)",
-                "  4295: Diversos",
+                "⚠️ No se ha cargado un PUC personalizado.",
+                "Por favor, sube tu catálogo PUC usando el endpoint /puc/upload",
                 "",
             ])
 
@@ -314,23 +356,18 @@ class GeminiAISuggestionService:
                 "INSTRUCCIONES DE CLASIFICACIÓN:",
                 "═══════════════════════════════════════════════════════════════",
                 "",
-                "1. SOLO usa códigos de 4 DÍGITOS del catálogo anterior",
-                "2. NO inventes códigos - selecciona ÚNICAMENTE de la lista",
-                "3. Analiza la descripción del producto/servicio para determinar:",
-                "   - ¿Es ingreso operacional (actividad principal)? → Grupo 41",
-                "   - ¿Es ingreso no operacional (secundario)? → Grupo 42",
-                "4. Dentro del grupo, elige el código MÁS ESPECÍFICO que coincida",
-                "5. Si hay duda, usa el código más genérico del grupo apropiado",
+                "1. Analiza CADA línea de producto/servicio de la factura",
+                "2. Para CADA línea, busca en el catálogo JSON la cuenta PUC más apropiada",
+                "3. Usa el campo 'id' de la cuenta seleccionada (importante para referencia)",
+                "4. Usa el campo 'codigo' exacto de la cuenta seleccionada",
+                "5. NO inventes códigos - SOLO usa los que están en el catálogo JSON",
                 "",
                 "CRITERIOS DE SELECCIÓN:",
-                "- 4135: Para venta de productos/mercancías",
-                "- 4140: Para servicios de alimentos/bebidas/alojamiento",
-                "- 4155: Para servicios profesionales/consultoría/alquileres",
-                "- 4145: Para servicios de transporte/logística",
-                "- 4160: Para servicios educativos/capacitación",
-                "- 4165: Para servicios de salud",
-                "- 4235: Para otros servicios generales",
-                "- 4295: Para ingresos diversos no clasificados",
+                "- Lee cuidadosamente la descripción del producto/servicio",
+                "- Analiza el tipo de transacción (venta, servicio, etc.)",
+                "- Compara con los 'nombre', 'categoria' y 'clase' de las cuentas PUC",
+                "- Elige la cuenta que mejor coincida semánticamente",
+                "- Si hay múltiples opciones similares, elige la más específica",
                 "",
                 "═══════════════════════════════════════════════════════════════",
                 "FORMATO DE RESPUESTA:",
@@ -339,15 +376,51 @@ class GeminiAISuggestionService:
                 "Responde ÚNICAMENTE con un array JSON (sin markdown, sin ```json):",
                 "",
                 '[',
-                '  {"line_number": 1, "account_code": "4135", "rationale": "Venta de mercancía - comercio", "confidence": 0.95},',
-                '  {"line_number": 2, "account_code": "4140", "rationale": "Servicio de restaurante", "confidence": 0.90}',
+                '  {',
+                '    "line_number": 1,',
+                '    "puc_account_id": "uuid-de-la-cuenta-puc",',
+                '    "account_code": "41350101",',
+                '    "account_name": "Venta de mercancías al por mayor",',
+                '    "rationale": "Este producto/servicio corresponde a [tipo de operación]. Se clasifica como [categoría] porque [razón específica]. La cuenta seleccionada es apropiada dado que [justificación basada en el nombre/categoría de la cuenta del catálogo PUC].",',
+                '    "confidence": 0.95',
+                '  },',
+                '  {',
+                '    "line_number": 2,',
+                '    "puc_account_id": "uuid-de-otra-cuenta",',
+                '    "account_code": "41400501",',
+                '    "account_name": "Ingresos operacionales - Restaurante",',
+                '    "rationale": "Se trata de un servicio de alimentación. Se clasifica en la categoría de servicios de restaurante porque involucra la preparación y venta de alimentos. Esta cuenta del PUC es la indicada para registrar ingresos por este tipo de actividad comercial.",',
+                '    "confidence": 0.90',
+                '  }',
                 ']',
                 "",
+                "CAMPOS OBLIGATORIOS:",
+                "- line_number: número de línea (1, 2, 3...)",
+                "- puc_account_id: campo 'id' de la cuenta PUC seleccionada del catálogo JSON",
+                "- account_code: campo 'codigo' de la cuenta PUC seleccionada",
+                "- account_name: campo 'nombre' de la cuenta PUC seleccionada",
+                "- rationale: explicación DETALLADA (150-250 caracteres) que incluya:",
+                "    * Qué tipo de operación/producto/servicio es",
+                "    * Por qué se clasifica en esa categoría",
+                "    * Cómo coincide con la cuenta PUC seleccionada",
+                "    * Cualquier detalle relevante del vendedor/cliente si aplica",
+                "- confidence: número entre 0 y 1",
+                "",
                 "IMPORTANTE:",
-                "- account_code debe ser EXACTAMENTE 4 dígitos",
-                "- account_code debe existir en el catálogo anterior",
-                "- rationale debe explicar brevemente por qué se eligió ese código",
-                "- confidence debe ser entre 0 y 1",
+                "- Los valores puc_account_id, account_code y account_name DEBEN venir del catálogo JSON",
+                "- NO inventes IDs ni códigos",
+                "- El rationale debe ser informativo y profesional (piensa como un contador explicando)",
+                "- Menciona elementos específicos de la descripción del producto/servicio",
+                "- Explica claramente la conexión entre la transacción y la cuenta PUC",
+                "- Si el vendedor/cliente tiene actividad relevante, menciónalo",
+                "- Si no encuentras una cuenta apropiada, explica por qué y usa confidence bajo (< 0.5)",
+                "",
+                "EJEMPLO DE BUEN RATIONALE:",
+                '"El vendedor es una droguería que comercializa productos farmacéuticos. Este ítem corresponde a ',
+                'la venta de mercancías del giro comercial principal (productos de salud). Se clasifica en la cuenta ',
+                'de \'Comercio al por mayor y al detal\' ya que refleja los ingresos operacionales por la actividad ',
+                'comercial de compra-venta de productos. Esta es la clasificación apropiada según el PUC para empresas ',
+                'del sector comercio."',
             ]
         )
 

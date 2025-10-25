@@ -11,5 +11,6 @@ class AISuggestion:
     confidence: float
     source: str = "unknown"  # "heuristic" | "lookup" | "ai" | "hybrid" | "ml"
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    is_selected: bool = False  # Indica si el usuario seleccionó esta sugerencia
     line_number: int | None = None  # Número de línea de la factura asociada
+    puc_account_id: str | None = None  # ID de la cuenta PUC en Firestore
+    account_name: str | None = None  # Nombre de la cuenta PUC

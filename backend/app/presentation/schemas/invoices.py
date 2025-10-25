@@ -95,8 +95,9 @@ class AISuggestionResponse(BaseModel):
     confidence: float
     source: str
     generated_at: str  # ISO 8601 string
-    is_selected: bool
     line_number: int | None
+    puc_account_id: str | None = None  # ID de la cuenta PUC en Firestore
+    account_name: str | None = None  # Nombre de la cuenta PUC
 
     @classmethod
     def from_domain(cls, suggestion: AISuggestion) -> "AISuggestionResponse":
@@ -106,8 +107,9 @@ class AISuggestionResponse(BaseModel):
             confidence=suggestion.confidence,
             source=suggestion.source,
             generated_at=suggestion.generated_at.isoformat() if suggestion.generated_at else "",
-            is_selected=suggestion.is_selected,
             line_number=suggestion.line_number,
+            puc_account_id=suggestion.puc_account_id,
+            account_name=suggestion.account_name,
         )
 
 

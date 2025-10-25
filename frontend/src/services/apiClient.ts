@@ -55,8 +55,6 @@ interface SuggestionResponse {
   confidence: number;
   source?: string;
   generated_at?: string;
-  is_selected?: boolean;
-  line_number?: number | null;
 }
 
 interface SuggestionsEnvelope {
@@ -105,24 +103,8 @@ function mapSuggestion(payload: SuggestionResponse): AISuggestion {
     rationale: payload.rationale,
     confidence: payload.confidence,
     source: payload.source,
-    generatedAt: payload.generated_at,
-    isSelected: Boolean(payload.is_selected),
-    lineNumber: payload.line_number ?? null
+    generatedAt: payload.generated_at
   };
-}
-
-export async function selectSuggestion(
-  token: string,
-  invoiceId: string,
-  lineNumber: number,
-  accountCode: string
-): Promise<void> {
-  // PUT /invoices/{invoice_id}/suggest/{line_number}/select?account_code={code}
-  await api.put(
-    `/invoices/${invoiceId}/suggest/${lineNumber}/select?account_code=${encodeURIComponent(accountCode)}`,
-    {},
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
 }
 
 export async function loginRequest(email: string, password: string): Promise<LoginResponse> {

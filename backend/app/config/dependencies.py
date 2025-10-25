@@ -16,6 +16,12 @@ from app.application.use_cases import (
     RegisterUser,
     UploadInvoice,
 )
+from app.application.use_cases.puc import (
+    GetPUCForAI,
+    GetPUCStats,
+    ListPUC,
+    UploadPUC,
+)
 from app.infrastructure import (
     BcryptPasswordHasher,
     FirebaseAdminUnavailable,
@@ -29,6 +35,8 @@ from app.infrastructure import (
 from app.infrastructure.repositories.firestore_users import FirestoreUserRepository
 from app.infrastructure.repositories.firestore_invoices import FirestoreInvoiceRepository
 from app.infrastructure.repositories.firestore_suggestions import FirestoreAISuggestionRepository
+from app.infrastructure.repositories.firestore_puc import FirestorePUCRepository
+from app.infrastructure.services.puc_excel_parser import PUCExcelParserService
 
 
 @dataclass(slots=True)
@@ -68,6 +76,19 @@ def get_ai_suggestion_repository() -> FirestoreAISuggestionRepository:
 
 
 @lru_cache
+def get_puc_repository() -> FirestorePUCRepository:
+    """Factory para el repositorio de PUC"""
+    from firebase_admin import firestore
+    return FirestorePUCRepository(firestore.client())
+
+
+@lru_cache
+def get_puc_excel_parser() -> PUCExcelParserService:
+    """Factory para el parser de archivos Excel de PUC"""
+    return PUCExcelParserService()
+
+
+@lru_cache
 def get_password_hasher() -> BcryptPasswordHasher:
     return BcryptPasswordHasher()
 
@@ -91,6 +112,7 @@ def get_ai_suggestion_service() -> GeminiAISuggestionService:
     """
     Factory que retorna el servicio de AI Gemini.
     Requiere GEMINI_API_KEY en el entorno.
+    Inyecta el repositorio PUC para usar catálogos personalizados.
     """
     settings = get_settings()
     
@@ -101,7 +123,10 @@ def get_ai_suggestion_service() -> GeminiAISuggestionService:
             "GEMINI_API_KEY no está configurado en las variables de entorno"
         )
     
-    return GeminiAISuggestionService(api_key=api_key)
+    return GeminiAISuggestionService(
+        api_key=api_key,
+        puc_repository=get_puc_repository()
+    )
 
 
 @lru_cache
@@ -194,3 +219,26 @@ def get_invoice_detail_use_case() -> GetInvoiceDetail:
         invoice_repository=get_invoice_repository(),
         suggestion_repository=get_ai_suggestion_repository(),
     )
+
+
+def get_upload_puc_use_case() -> UploadPUC:
+    """Factory para el caso de uso de subir PUC"""
+    return UploadPUC(
+        puc_repository=get_puc_repository(),
+        excel_parser=get_puc_excel_parser(),
+    )
+
+
+def get_list_puc_use_case() -> ListPUC:
+    """Factory para el caso de uso de listar PUC"""
+    return ListPUC(puc_repository=get_puc_repository())
+
+
+def get_puc_stats_use_case() -> GetPUCStats:
+    """Factory para el caso de uso de estadísticas de PUC"""
+    return GetPUCStats(puc_repository=get_puc_repository())
+
+
+def get_puc_for_ai_use_case() -> GetPUCForAI:
+    """Factory para el caso de uso de obtener PUC para IA"""
+    return GetPUCForAI(puc_repository=get_puc_repository())

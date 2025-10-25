@@ -1,28 +1,27 @@
-# Cifrato Backend — API de Facturas Electrónicas (FastAPI)
+# Cifrato Backend - API de Facturas Electrónicas (FastAPI)
 
 Sistema de procesamiento de facturas electrónicas colombianas (DIAN) con sugerencias PUC inteligentes usando IA generativa.  
 El backend implementa **Clean Architecture** sobre **FastAPI** y utiliza las facturas XML/PDF en `app/assessment-files/` para validar parseo, reglas de IA y exportación.
 
 ---
 
-## Requisitos previos
+## Instrucciones para ejecutar el proyecto localmente
+
+### Requisitos previos
 
 - **Python 3.13+**
 - **pip**
-- **API Key de Gemini (Google AI Studio)** — obligatoria para las sugerencias con IA
-- **Firebase Admin** — opcional (para producción)
+- **API Key de Gemini (Google AI Studio)** - obligatoria para las sugerencias con IA
+- **Firebase Admin** - opcional (para producción)
 
----
-
-## Instalación y configuración local
-
-### 1) Clonar el repositorio
+### 1. Clonar el repositorio
 ```bash
-git clone <repository-url>
+git clone https://github.com/MrSancks/prueba-tecnica-cifrato.git
 cd backend
 ```
 
-### 2) Crear y activar entorno virtual
+### 2. Crear y activar entorno virtual
+
 **Windows (PowerShell):**
 ```powershell
 python -m venv venv
@@ -35,12 +34,15 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3) Instalar dependencias
+### 3. Instalar dependencias
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4) Crear archivo `.env` en `backend/`
+### 4. Configurar variables de entorno
+
+Crear archivo `.env` en la raíz del proyecto:
+
 ```env
 # Seguridad
 SECRET_KEY=tu-clave-secreta-super-segura-cambiar-en-produccion
@@ -51,18 +53,23 @@ GEMINI_API_KEY=tu-api-key-de-google-cloud
 
 # Firebase (opcional - para producción)
 FIREBASE_PROJECT_ID=cifrato-sandbox
-FIREBASE_CREDENTIALS_JSON=""  # pegar aquí el JSON de service account si aplica
+FIREBASE_CREDENTIALS_JSON=""
 ```
 
-> **Cómo obtener la API Key de Gemini:** ve a https://aistudio.google.com/app/apikey, crea/selecciona un proyecto, genera la API Key y pégala en `GEMINI_API_KEY`.
+**Cómo obtener la API Key de Gemini:**
+1. Visitar https://aistudio.google.com/app/apikey
+2. Crear o seleccionar un proyecto
+3. Generar la API Key
+4. Pegar la clave en `GEMINI_API_KEY`
 
-### 5) Iniciar el servidor
+### 5. Iniciar el servidor
 ```bash
 uvicorn app.main:app --reload --log-level info
 ```
-El servidor quedará disponible en: **http://localhost:8000**
 
-### 6) Documentación interactiva
+El servidor estará disponible en: **http://localhost:8000**
+
+### 6. Documentación interactiva
 - Swagger UI: http://localhost:8000/docs  
 - ReDoc: http://localhost:8000/redoc
 

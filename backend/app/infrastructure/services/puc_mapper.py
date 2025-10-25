@@ -3,10 +3,9 @@ Servicio para mapear códigos PUC de 4 dígitos a códigos específicos de 8 dí
 """
 from __future__ import annotations
 
-import csv
+import json
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -31,15 +30,14 @@ class PUCMapperService:
     """
     Servicio que mapea códigos PUC genéricos (4 dígitos) a códigos específicos
     de la empresa (8 dígitos) usando IA.
+    
+    Ahora carga las cuentas desde el repositorio en lugar de un archivo CSV.
     """
     
-    def __init__(self, puc_file_path: str | None = None, api_key: str | None = None):
-        self.accounts: list[PUCAccount] = []
+    def __init__(self, puc_repository=None, api_key: str | None = None):
+        self.puc_repository = puc_repository
         self.api_key = api_key
         self._initialized = False
-        
-        if puc_file_path:
-            self.load_puc_from_csv(puc_file_path)
         
         if api_key and genai:
             try:
@@ -49,41 +47,53 @@ class PUCMapperService:
             except Exception as e:
                 logger.error(f"❌ Error configurando Gemini para PUC Mapper: {e}")
     
-    def load_puc_from_csv(self, file_path: str) -> None:
-        """Carga el PUC desde un archivo CSV"""
+    def load_accounts_for_owner(self, owner_id: str) -> list[PUCAccount]:
+        """
+        Carga las cuentas PUC del owner desde el repositorio.
+        
+        Returns:
+            Lista de PUCAccount con las cuentas del owner
+        """
+        if not self.puc_repository:
+            logger.warning("⚠️ No hay repositorio PUC configurado")
+            return []
+        
         try:
-            path = Path(file_path)
-            if not path.exists():
-                logger.warning(f"⚠️ Archivo PUC no encontrado: {file_path}")
-                return
+            # Obtener todas las cuentas del owner (sin paginación)
+            accounts_domain, _ = self.puc_repository.list_by_owner(
+                owner_id=owner_id,
+                search=None,
+                limit=10000,
+                offset=0,
+            )
             
-            with open(path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    # Saltar filas de encabezado o vacías
-                    if not row.get('Código') or row['Código'] == 'Código':
-                        continue
-                    
-                    # Solo tomar cuentas transaccionales (nivel más bajo)
-                    if row.get('Nivel agrupación') == 'Transaccional':
-                        self.accounts.append(PUCAccount(
-                            code=row['Código'].strip(),
-                            name=row.get('Nombre', '').strip(),
-                            category=row.get('Categoría', '').strip(),
-                            class_type=row.get('Clase', '').strip(),
-                            level=row.get('Nivel agrupación', '').strip(),
-                        ))
+            # Convertir a formato interno
+            accounts = []
+            for acc in accounts_domain:
+                # Solo tomar cuentas transaccionales
+                if acc.nivel_agrupacion.lower() == "transaccional":
+                    accounts.append(PUCAccount(
+                        code=acc.codigo,
+                        name=acc.nombre,
+                        category=acc.categoria,
+                        class_type=acc.clase,
+                        level=acc.nivel_agrupacion,
+                    ))
             
-            logger.info(f"✅ Cargadas {len(self.accounts)} cuentas del PUC desde {file_path}")
+            logger.info(f"✅ Cargadas {len(accounts)} cuentas PUC para owner {owner_id}")
+            return accounts
+            
         except Exception as e:
-            logger.error(f"❌ Error cargando PUC: {e}")
+            logger.error(f"❌ Error cargando PUC para owner {owner_id}: {e}")
+            return []
     
-    def get_accounts_by_prefix(self, prefix: str) -> list[PUCAccount]:
+    def get_accounts_by_prefix(self, accounts: list[PUCAccount], prefix: str) -> list[PUCAccount]:
         """Obtiene todas las cuentas que empiezan con el prefijo dado"""
-        return [acc for acc in self.accounts if acc.code.startswith(prefix)]
+        return [acc for acc in accounts if acc.code.startswith(prefix)]
     
     def map_to_specific_account(
         self,
+        owner_id: str,
         generic_code: str,
         description: str,
         rationale: str,
@@ -91,6 +101,12 @@ class PUCMapperService:
         """
         Mapea un código PUC genérico (4 dígitos) a un código específico (8 dígitos)
         usando IA para analizar la descripción y encontrar la cuenta más apropiada.
+        
+        Args:
+            owner_id: ID del propietario/empresa
+            generic_code: Código PUC genérico (4 dígitos)
+            description: Descripción de la transacción
+            rationale: Justificación del mapeo
         
         Returns:
             {
@@ -100,9 +116,21 @@ class PUCMapperService:
                 "explanation": "..."
             }
         """
+        # Cargar cuentas del owner
+        accounts = self.load_accounts_for_owner(owner_id)
+        
+        if not accounts:
+            logger.warning(f"⚠️ Owner {owner_id} no tiene PUC cargado")
+            return {
+                "specific_code": generic_code,
+                "account_name": "Cuenta genérica (sin PUC personalizado)",
+                "confidence": 0.3,
+                "explanation": "El usuario no ha cargado un PUC personalizado",
+            }
+        
         if not self._initialized or genai is None:
             # Fallback: devolver el primer código que coincida
-            candidates = self.get_accounts_by_prefix(generic_code)
+            candidates = self.get_accounts_by_prefix(accounts, generic_code)
             if candidates:
                 return {
                     "specific_code": candidates[0].code,
@@ -118,7 +146,7 @@ class PUCMapperService:
             }
         
         # Obtener candidatos que empiecen con el código genérico
-        candidates = self.get_accounts_by_prefix(generic_code)
+        candidates = self.get_accounts_by_prefix(accounts, generic_code)
         
         if not candidates:
             return {
@@ -160,7 +188,6 @@ class PUCMapperService:
                 text = text[:-3]
             text = text.strip()
             
-            import json
             result = json.loads(text)
             
             return {

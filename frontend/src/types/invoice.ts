@@ -29,6 +29,4 @@ export interface AISuggestion {
   confidence: number;
   source?: string;
   generatedAt?: string;
-  isSelected?: boolean;
-  lineNumber?: number | null;
 }
