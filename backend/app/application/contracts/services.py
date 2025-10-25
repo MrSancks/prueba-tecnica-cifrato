@@ -1,4 +1,4 @@
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class PasswordHasher(Protocol):
@@ -33,4 +33,25 @@ class InvoiceWorkbookBuilder(Protocol):
         invoices: list[object],
         suggestions_map: dict[str, list[object]],
     ) -> bytes:
+        ...
+
+
+class PUCMapper(Protocol):
+    def map_to_specific_account(
+        self,
+        generic_code: str,
+        description: str,
+        rationale: str,
+    ) -> dict[str, Any]:
+        """
+        Mapea un código PUC genérico (4 dígitos) a código específico de la empresa (8 dígitos).
+        
+        Returns:
+            {
+                "specific_code": "11050501",
+                "account_name": "Efectivo CL 72",
+                "confidence": 0.85,
+                "explanation": "..."
+            }
+        """
         ...

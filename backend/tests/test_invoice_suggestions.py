@@ -45,7 +45,11 @@ def create_invoice_for(owner_id: str, filename: str = "sales-invoice-2.xml"):
     )
 
 
-def test_generate_suggestions_combines_sources() -> None:
+def test_generate_suggestions_uses_ai_first() -> None:
+    """
+    Sistema refactorizado: ahora usa AI como fuente primaria.
+    Ya no hay heurísticas hardcodeadas.
+    """
     owner_id = "owner-suggestions"
     invoice = create_invoice_for(owner_id)
 
@@ -57,9 +61,13 @@ def test_generate_suggestions_combines_sources() -> None:
 
     result = use_case.execute(owner_id=owner_id, invoice_id=invoice.id)
 
-    assert result[0].account_code == "6135"
-    assert any(item.account_code == "5305" for item in result)
+    # Verifica que devuelve sugerencias del AI stub
+    assert len(result) > 0
+    assert result[0].account_code == "5305"
+    assert result[0].source == "ai"
+    assert "Flete y transporte" in result[0].rationale
 
+    # Verifica que se persisten
     stored = dependencies.get_ai_suggestion_repository().list_for_invoice(invoice.id)
     assert stored == result
 
@@ -79,6 +87,9 @@ def test_generate_suggestions_requires_invoice_owner() -> None:
 
 @pytest.mark.anyio
 async def test_router_returns_serialized_suggestions() -> None:
+    """
+    Verifica que el router serializa correctamente las sugerencias del AI.
+    """
     user = User.create(email="suggestions@example.com", hashed_password="secret")
     invoice = create_invoice_for(user.id)
 
@@ -96,4 +107,6 @@ async def test_router_returns_serialized_suggestions() -> None:
 
     assert response.invoice_id == invoice.id
     assert response.suggestions
-    assert response.suggestions[0].account_code == "6135"
+    # Verifica que devuelve el código del AI stub
+    assert response.suggestions[0].account_code == "5305"
+    assert response.suggestions[0].source == "ai"

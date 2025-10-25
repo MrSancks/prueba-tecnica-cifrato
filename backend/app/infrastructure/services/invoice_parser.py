@@ -22,8 +22,22 @@ class UBLInvoiceParser:
         except etree.XMLSyntaxError as exc:
             raise ValueError("No fue posible leer el XML proporcionado") from exc
 
+        # Detectar si es un AttachedDocument (contiene una factura embebida en CDATA)
+        # Extraer el nombre local del tag (sin namespace)
+        doc_type = root.tag.split("}")[-1] if "}" in root.tag else root.tag
+        if doc_type == "AttachedDocument":
+            root = self._extract_invoice_from_cdata(root)
+            if root is None:
+                raise ValueError("No se encontró factura embebida en el AttachedDocument")
+
         raw_xml = xml_bytes.decode("utf-8", errors="ignore")
         get_text = lambda path: self._read_text(root, path)
+
+        # Detectar el tipo de documento UBL por el nombre local del root
+        # Puede ser Invoice, CreditNote o DebitNote (entre otros). Esto nos
+        # permite adaptar la lectura de líneas y cantidades.
+        # Extraer el nombre local del tag (sin namespace)
+        doc_type = root.tag.split("}")[-1] if "}" in root.tag else root.tag
 
         external_id = get_text("cbc:ID")
         issue_date_text = get_text("cbc:IssueDate")
@@ -62,25 +76,36 @@ class UBLInvoiceParser:
         tax_element = root.find("cac:TaxTotal/cbc:TaxAmount", namespaces=self._namespaces)
         tax_amount = self._to_decimal(tax_element.text) if tax_element is not None and tax_element.text else Decimal("0")
 
+        # Soportar múltiples tipos de línea (InvoiceLine, CreditNoteLine, DebitNoteLine)
+        line_tags = ["cac:InvoiceLine", "cac:CreditNoteLine", "cac:DebitNoteLine"]
+        # Cantidad puede aparecer como InvoicedQuantity, CreditedQuantity o DebitedQuantity
+        quantity_paths = ["cbc:InvoicedQuantity", "cbc:CreditedQuantity", "cbc:DebitedQuantity"]
+
         lines: list[InvoiceLine] = []
-        for line in root.findall("cac:InvoiceLine", namespaces=self._namespaces):
-            line_id = self._read_text(line, "cbc:ID") or str(len(lines) + 1)
-            description = self._first_non_empty(
-                self._read_text(line, "cac:Item/cbc:Description"),
-                self._read_text(line, "cac:Item/cac:ItemIdentification/cbc:ID"),
-            )
-            quantity = self._to_decimal(self._read_text(line, "cbc:InvoicedQuantity"))
-            unit_price = self._to_decimal(self._read_text(line, "cac:Price/cbc:PriceAmount"))
-            line_total = self._to_decimal(self._read_text(line, "cbc:LineExtensionAmount"))
-            lines.append(
-                InvoiceLine(
-                    line_id=line_id,
-                    description=description,
-                    quantity=quantity,
-                    unit_price=unit_price,
-                    line_extension_amount=line_total,
+        for tag in line_tags:
+            for line in root.findall(tag, namespaces=self._namespaces):
+                line_id = self._read_text(line, "cbc:ID") or str(len(lines) + 1)
+                description = self._first_non_empty(
+                    self._read_text(line, "cac:Item/cbc:Description"),
+                    self._read_text(line, "cac:Item/cac:ItemIdentification/cbc:ID"),
                 )
-            )
+                # Leer la primera ruta de cantidad disponible
+                qty_text = self._read_first(line, *quantity_paths)
+                quantity = self._to_decimal(qty_text)
+                unit_price = self._to_decimal(self._read_text(line, "cac:Price/cbc:PriceAmount"))
+                line_total = self._to_decimal(self._read_text(line, "cbc:LineExtensionAmount"))
+                lines.append(
+                    InvoiceLine(
+                        line_id=line_id,
+                        description=description,
+                        quantity=quantity,
+                        unit_price=unit_price,
+                        line_extension_amount=line_total,
+                    )
+                )
+            # si ya encontramos líneas, no intentamos con los tags siguientes
+            if lines:
+                break
 
         if not lines:
             raise ValueError("No se encontraron líneas de producto en la factura")
@@ -103,6 +128,14 @@ class UBLInvoiceParser:
             return node.text.strip()
         return ""
 
+    def _read_first(self, element: etree._Element, *paths: str) -> str:
+        """Devuelve el texto de la primera ruta que no sea vacía entre las dadas."""
+        for path in paths:
+            value = self._read_text(element, path)
+            if value:
+                return value
+        return ""
+
     def _first_non_empty(self, *values: str) -> str:
         for value in values:
             if value:
@@ -114,3 +147,66 @@ class UBLInvoiceParser:
             return Decimal(value.strip()) if value else Decimal("0")
         except (InvalidOperation, AttributeError) as exc:
             raise ValueError("No fue posible interpretar un valor numérico") from exc
+
+    def _extract_invoice_from_cdata(self, root: etree._Element) -> etree._Element | None:
+        """
+        Extrae la factura embebida en un AttachedDocument.
+        
+        La estructura típica es:
+        AttachedDocument
+          -> cac:ParentDocumentLineReference
+            -> cac:DocumentReference
+              -> cac:Attachment
+                -> cac:ExternalReference
+                  -> cbc:Description (CDATA con el XML de la factura)
+        
+        También puede estar en:
+        AttachedDocument
+          -> cac:Attachment
+            -> cac:ExternalReference
+              -> cbc:Description (CDATA)
+        
+        Nota: Puede haber múltiples cbc:Description. Uno puede contener un ApplicationResponse
+        (validación de la DIAN) y otro la factura real. Intentamos encontrar el que contenga
+        una factura válida con LegalMonetaryTotal.
+        """
+        # Intentar ambas rutas posibles
+        paths = [
+            ".//cac:ParentDocumentLineReference/cac:DocumentReference/cac:Attachment/cac:ExternalReference/cbc:Description",
+            ".//cac:Attachment/cac:ExternalReference/cbc:Description",
+        ]
+        
+        for path in paths:
+            # findall porque puede haber múltiples elementos Description
+            cdata_elements = root.findall(path, namespaces=self._namespaces)
+            
+            for cdata_element in cdata_elements:
+                if cdata_element is not None and cdata_element.text:
+                    inner_xml = cdata_element.text.strip()
+                    
+                    # Limpiar el XML embebido (puede tener declaración XML)
+                    if inner_xml.startswith("<?xml"):
+                        # Quitar la declaración XML si existe
+                        inner_xml = inner_xml.split("?>", 1)[-1].strip()
+                    
+                    try:
+                        # Parsear el XML embebido
+                        embedded_root = etree.fromstring(inner_xml.encode("utf-8"))
+                        
+                        # Verificar que sea una factura válida (debe tener LegalMonetaryTotal)
+                        # Esto descarta ApplicationResponse que no tiene totales
+                        totals = embedded_root.find(".//cac:LegalMonetaryTotal/cbc:PayableAmount", namespaces=self._namespaces)
+                        if totals is not None:
+                            return embedded_root
+                            
+                    except etree.XMLSyntaxError:
+                        # Intentar con el texto original sin limpiar
+                        try:
+                            embedded_root = etree.fromstring(cdata_element.text.encode("utf-8"))
+                            totals = embedded_root.find(".//cac:LegalMonetaryTotal/cbc:PayableAmount", namespaces=self._namespaces)
+                            if totals is not None:
+                                return embedded_root
+                        except etree.XMLSyntaxError:
+                            continue
+        
+        return None

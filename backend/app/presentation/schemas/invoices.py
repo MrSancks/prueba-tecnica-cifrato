@@ -93,6 +93,10 @@ class AISuggestionResponse(BaseModel):
     account_code: str
     rationale: str
     confidence: float
+    source: str
+    generated_at: str  # ISO 8601 string
+    is_selected: bool
+    line_number: int | None
 
     @classmethod
     def from_domain(cls, suggestion: AISuggestion) -> "AISuggestionResponse":
@@ -100,6 +104,10 @@ class AISuggestionResponse(BaseModel):
             account_code=suggestion.account_code,
             rationale=suggestion.rationale,
             confidence=suggestion.confidence,
+            source=suggestion.source,
+            generated_at=suggestion.generated_at.isoformat() if suggestion.generated_at else "",
+            is_selected=suggestion.is_selected,
+            line_number=suggestion.line_number,
         )
 
 

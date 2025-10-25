@@ -3,9 +3,13 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config.security import resolve_user_from_token
 from app.domain import User
+
+# Define el esquema de seguridad Bearer para Swagger
+security = HTTPBearer(auto_error=False)
 
 
 def _get_user_from_state(request: Request) -> User | None:
@@ -31,7 +35,10 @@ def _resolve_user_from_request(request: Request) -> User | None:
     return None
 
 
-def require_authenticated_user(request: Request) -> User:
+def require_authenticated_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> User:
     user = _resolve_user_from_request(request)
     if user is None:
         raise HTTPException(
@@ -42,7 +49,10 @@ def require_authenticated_user(request: Request) -> User:
     return user
 
 
-def get_optional_user(request: Request) -> User | None:
+def get_optional_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> User | None:
     return _resolve_user_from_request(request)
 
 

@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -73,8 +74,15 @@ async def test_upload_invoice_router_validates_content_type() -> None:
         filename="invoice.txt",
         headers=Headers({"content-type": "text/plain"}),
     )
+    background_tasks = Mock()
     with pytest.raises(HTTPException) as exc:
-        await invoices.upload_invoice(file=file, current_user=user, use_case=use_case)
+        await invoices.upload_invoice(
+            file=file,
+            current_user=user,
+            background_tasks=background_tasks,
+            use_case=use_case,
+            generate_suggestions_use_case=Mock(),
+        )
     assert exc.value.status_code == 400
     assert exc.value.detail == "Solo se permiten archivos XML"
 
@@ -90,9 +98,18 @@ async def test_upload_invoice_router_returns_invoice_response() -> None:
         headers=Headers({"content-type": "application/xml"}),
     )
 
-    response = await invoices.upload_invoice(file=file, current_user=user, use_case=use_case)
+    background_tasks = Mock()
+    response = await invoices.upload_invoice(
+        file=file,
+        current_user=user,
+        background_tasks=background_tasks,
+        use_case=use_case,
+        generate_suggestions_use_case=Mock(),
+    )
     assert response.external_id
     assert response.lines
     assert response.currency == "COP"
     assert response.status == "pendiente"
     assert isinstance(response.taxes, list)
+    # Verificar que se programó la tarea en background
+    assert background_tasks.add_task.called

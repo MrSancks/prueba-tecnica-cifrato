@@ -32,3 +32,6 @@ class AISuggestionRepository(Protocol):
 
     def replace_for_invoice(self, invoice_id: str, suggestions: list[object]) -> None:
         ...
+
+    def select_suggestion(self, invoice_id: str, line_number: int, account_code: str) -> None:
+        ...

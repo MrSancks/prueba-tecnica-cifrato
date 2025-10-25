@@ -18,18 +18,14 @@ class FirebaseAdminUnavailable(RuntimeError):
 
 
 def _load_service_account() -> dict[str, Any]:
-    credentials_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
+    # Only support FIREBASE_CREDENTIALS_JSON. Do not read a credentials file from disk.
     credentials_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-
-    if credentials_path:
-        with open(credentials_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
 
     if credentials_json:
         return json.loads(credentials_json)
 
     raise FirebaseAdminUnavailable(
-        "Configura FIREBASE_CREDENTIALS_PATH o FIREBASE_CREDENTIALS_JSON para inicializar Firebase Admin.",
+        "Configura FIREBASE_CREDENTIALS_JSON para inicializar Firebase Admin. (FIREBASE_CREDENTIALS_PATH no está soportado)",
     )
 
 

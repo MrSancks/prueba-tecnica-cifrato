@@ -83,57 +83,39 @@ class GenerateAccountingSuggestions:
         if invoice is None or invoice.owner_id != owner_id:
             raise InvoiceNotFoundError("La factura no existe para el usuario indicado")
 
-        heuristics = self._build_deterministic_suggestions(invoice)
+        # Prioridad 1: Intentar generar con IA
         ai_payload = self.ai_service.generate_suggestions(self._serialize_invoice(invoice))
-        model_suggestions = self._coerce_ai_suggestions(ai_payload)
-        merged = self._merge_suggestions(heuristics, model_suggestions)
-        self.suggestion_repository.replace_for_invoice(invoice.id, merged)
-        return merged
+        ai_suggestions = self._coerce_ai_suggestions(ai_payload)
+        
+        # Si IA generó sugerencias, usarlas
+        if ai_suggestions:
+            self.suggestion_repository.replace_for_invoice(invoice.id, ai_suggestions)
+            return ai_suggestions
+        
+        # Prioridad 2: Fallback genérico si IA no está disponible
+        fallback_suggestions = self._build_generic_fallback(invoice)
+        self.suggestion_repository.replace_for_invoice(invoice.id, fallback_suggestions)
+        return fallback_suggestions
 
-    def _build_deterministic_suggestions(self, invoice: Invoice) -> list[AISuggestion]:
-        collected: list[AISuggestion] = []
-        supplier = invoice.supplier_name.upper()
-        keywords = {line.description.upper() for line in invoice.lines}
-        text_blob = " ".join(keywords)
-
-        if "BURGER" in supplier or "BURGER" in text_blob or "COMBO" in text_blob:
-            collected.append(
-                AISuggestion(
-                    account_code="6135",
-                    rationale="Costo de ventas de comidas preparadas proveniente de un proveedor de hamburguesas",
-                    confidence=0.85,
-                )
+    def _build_generic_fallback(self, invoice: Invoice) -> list[AISuggestion]:
+        """
+        Fallback genérico cuando la IA no está disponible.
+        NO asume tipo de negocio específico - solo proporciona sugerencia básica
+        para que el contador pueda clasificar manualmente.
+        """
+        # Sugerencia genérica que funciona para cualquier tipo de factura
+        return [
+            AISuggestion(
+                account_code="",  # Vacío - el usuario debe completar
+                rationale=(
+                    "Servicio de IA no disponible. Por favor, clasifique manualmente esta factura según su plan contable. "
+                    f"Proveedor: {invoice.supplier_name}. "
+                    f"Descripción de líneas: {', '.join(line.description for line in invoice.lines[:3])}."
+                ),
+                confidence=0.0,  # Confianza 0 indica que requiere revisión obligatoria
+                source="fallback",
             )
-
-        meat_keywords = {"CARNE", "RES", "PALETERO", "MATAMBRE", "LOMO"}
-        if meat_keywords & {word for word in text_blob.split()} or "CARNES" in supplier:
-            collected.append(
-                AISuggestion(
-                    account_code="6135",
-                    rationale="Adquisición de proteínas y cortes para la operación del restaurante",
-                    confidence=0.82,
-                )
-            )
-
-        cleaning_tokens = {"LIMPIA", "ASEO", "DESINF"}
-        if cleaning_tokens & {word for word in text_blob.split()}:
-            collected.append(
-                AISuggestion(
-                    account_code="5165",
-                    rationale="Compra de insumos de aseo y limpieza necesarios para el punto de venta",
-                    confidence=0.8,
-                )
-            )
-
-        if not collected:
-            collected.append(
-                AISuggestion(
-                    account_code="5199",
-                    rationale="Gasto operativo sin clasificación específica en la factura analizada",
-                    confidence=0.6,
-                )
-            )
-        return collected
+        ]
 
     def _serialize_invoice(self, invoice: Invoice) -> dict[str, object]:
         return {
@@ -154,17 +136,40 @@ class GenerateAccountingSuggestions:
         }
 
     def _coerce_ai_suggestions(self, raw: list[dict[str, object]]) -> list[AISuggestion]:
+        """
+        Convierte la respuesta raw de la IA en objetos AISuggestion.
+        Soporta tanto formato agregado como por línea.
+        """
         suggestions: list[AISuggestion] = []
         for item in raw:
             code = str(item.get("account_code", "")).strip()
             if not code:
                 continue
-            rationale = str(item.get("rationale", "Sugerencia generada por el modelo")).strip()
+            
+            # Construir rationale incluyendo número de línea si está presente
+            line_number = item.get("line_number")
+            rationale_base = str(item.get("rationale", "Sugerencia generada por el modelo de IA")).strip()
+            
+            if line_number:
+                rationale = f"Línea {line_number}: {rationale_base}"
+            else:
+                rationale = rationale_base
+            
             try:
                 confidence = float(item.get("confidence", 0.5))
             except (TypeError, ValueError):
                 confidence = 0.5
-            suggestions.append(AISuggestion(account_code=code, rationale=rationale, confidence=confidence))
+            
+            suggestions.append(
+                AISuggestion(
+                    account_code=code,
+                    rationale=rationale,
+                    confidence=confidence,
+                    source="ai",
+                    line_number=int(line_number) if line_number else None,
+                    is_selected=False,
+                )
+            )
         return suggestions
 
     def _merge_suggestions(
@@ -197,10 +202,43 @@ class ExportInvoicesToExcel:
 
         ordered = sorted(invoices, key=lambda item: item.issue_date)
         suggestions_map = {
-            invoice.id: self.suggestion_repository.list_for_invoice(invoice.id)
+            invoice.id: self._get_or_auto_select_suggestion(invoice.id)
             for invoice in ordered
         }
         return self.workbook_builder.build(ordered, suggestions_map)
+    
+    def _get_or_auto_select_suggestion(self, invoice_id: str) -> list[AISuggestion]:
+        """
+        Para cada factura:
+        1. Si tiene sugerencia seleccionada, usar esa
+        2. Si no, auto-seleccionar la de mayor confianza
+        3. En caso de empate en confianza, elegir la más clara (rationale más corto)
+        """
+        suggestions = self.suggestion_repository.list_for_invoice(invoice_id)
+        
+        if not suggestions:
+            return []
+        
+        # Verificar si ya hay una seleccionada
+        selected = [s for s in suggestions if s.is_selected]
+        if selected:
+            return selected
+        
+        # Auto-seleccionar: mayor confianza
+        max_confidence = max(s.confidence for s in suggestions)
+        top_candidates = [s for s in suggestions if s.confidence == max_confidence]
+        
+        if len(top_candidates) == 1:
+            # Una ganadora clara
+            winner = top_candidates[0]
+        else:
+            # Empate en confianza: elegir la más clara (rationale más corto y específico)
+            top_candidates.sort(key=lambda s: len(s.rationale))
+            winner = top_candidates[0]
+        
+        # Marcar como seleccionada (para la próxima exportación)
+        # Nota: Esto es opcional - podríamos solo usarla sin persistir la selección
+        return [winner]
 
 
 @dataclass(slots=True)

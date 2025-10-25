@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from io import BytesIO
-from typing import Iterable
+from typing import Any, Iterable
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -19,6 +19,7 @@ except ModuleNotFoundError:  # pragma: no cover - degradación controlada
 @dataclass(slots=True)
 class SpreadsheetInvoiceWorkbookBuilder:
     engine: str = "openpyxl"
+    puc_catalog_generator: Any = None  # PUCCatalogGenerator opcional
 
     def build(
         self,
@@ -36,30 +37,15 @@ class SpreadsheetInvoiceWorkbookBuilder:
     ) -> bytes:
         buffer = BytesIO()
 
-        resumen_rows = [
-            {
-                "Factura interna": invoice.id,
-                "Consecutivo externo": invoice.external_id,
-                "Fecha": invoice.issue_date,
-                "Proveedor": invoice.supplier_name,
-                "NIT proveedor": invoice.supplier_tax_id,
-                "Cliente": invoice.customer_name,
-                "NIT cliente": invoice.customer_tax_id,
-                "Moneda": invoice.currency,
-                "Subtotal": float(invoice.total_amount - invoice.tax_amount),
-                "Impuestos": float(invoice.tax_amount),
-                "Total": float(invoice.total_amount),
-            }
-            for invoice in invoices
-        ]
-
-        line_rows = list(self._build_lines_rows(invoices))
-        suggestion_rows = list(self._build_suggestions_rows(invoices, suggestions_map))
+        # Hoja 1: Resumen con factura + sugerencias PUC
+        resumen_rows = list(self._build_resumen_rows(invoices, suggestions_map))
+        
+        # Hoja 2: Productos (líneas de detalle)
+        productos_rows = list(self._build_lines_rows(invoices))
 
         with pd.ExcelWriter(buffer, engine=self.engine) as writer:  # type: ignore[arg-type]
             pd.DataFrame(resumen_rows).to_excel(writer, sheet_name="Resumen", index=False)  # type: ignore[call-arg]
-            pd.DataFrame(line_rows).to_excel(writer, sheet_name="Lineas", index=False)  # type: ignore[call-arg]
-            pd.DataFrame(suggestion_rows).to_excel(writer, sheet_name="Asientos", index=False)  # type: ignore[call-arg]
+            pd.DataFrame(productos_rows).to_excel(writer, sheet_name="Productos", index=False)  # type: ignore[call-arg]
 
         return buffer.getvalue()
 
@@ -68,6 +54,7 @@ class SpreadsheetInvoiceWorkbookBuilder:
         invoices: list[Invoice],
         suggestions_map: dict[str, list[AISuggestion]],
     ) -> bytes:
+        # Hoja 1: Resumen
         resumen_sheet = [
             [
                 "Factura interna",
@@ -81,31 +68,37 @@ class SpreadsheetInvoiceWorkbookBuilder:
                 "Subtotal",
                 "Impuestos",
                 "Total",
+                "Código PUC",
+                "Justificación",
+                "Confianza",
             ]
         ]
-        for invoice in invoices:
-            subtotal = invoice.total_amount - invoice.tax_amount
+        for row in self._build_resumen_rows(invoices, suggestions_map):
             resumen_sheet.append(
                 [
-                    invoice.id,
-                    invoice.external_id,
-                    invoice.issue_date.isoformat(),
-                    invoice.supplier_name,
-                    invoice.supplier_tax_id,
-                    invoice.customer_name,
-                    invoice.customer_tax_id,
-                    invoice.currency,
-                    float(subtotal),
-                    float(invoice.tax_amount),
-                    float(invoice.total_amount),
+                    row["Factura interna"],
+                    row["Consecutivo externo"],
+                    row["Fecha"],
+                    row["Proveedor"],
+                    row["NIT proveedor"],
+                    row["Cliente"],
+                    row["NIT cliente"],
+                    row["Moneda"],
+                    row["Subtotal"],
+                    row["Impuestos"],
+                    row["Total"],
+                    row["Código PUC"],
+                    row["Justificación"],
+                    row["Confianza"],
                 ]
             )
 
-        line_sheet = [
+        # Hoja 2: Productos
+        productos_sheet = [
             [
                 "Factura interna",
                 "Consecutivo externo",
-                "ID línea",
+                "ID producto",
                 "Descripción",
                 "Cantidad",
                 "Precio unitario",
@@ -113,35 +106,15 @@ class SpreadsheetInvoiceWorkbookBuilder:
             ]
         ]
         for row in self._build_lines_rows(invoices):
-            line_sheet.append(
+            productos_sheet.append(
                 [
                     row["Factura interna"],
                     row["Consecutivo externo"],
-                    row["ID línea"],
+                    row["ID producto"],
                     row["Descripción"],
                     row["Cantidad"],
                     row["Precio unitario"],
                     row["Subtotal"],
-                ]
-            )
-
-        suggestion_sheet = [
-            [
-                "Factura interna",
-                "Consecutivo externo",
-                "Cuenta",
-                "Justificación",
-                "Confianza",
-            ]
-        ]
-        for row in self._build_suggestions_rows(invoices, suggestions_map):
-            suggestion_sheet.append(
-                [
-                    row["Factura interna"],
-                    row["Consecutivo externo"],
-                    row["Cuenta"],
-                    row["Justificación"],
-                    row["Confianza"],
                 ]
             )
 
@@ -156,10 +129,42 @@ class SpreadsheetInvoiceWorkbookBuilder:
             archive.writestr("xl/workbook.xml", self._workbook_xml())
             archive.writestr("xl/styles.xml", self._styles_xml())
             archive.writestr("xl/worksheets/sheet1.xml", self._sheet_xml(resumen_sheet))
-            archive.writestr("xl/worksheets/sheet2.xml", self._sheet_xml(line_sheet))
-            archive.writestr("xl/worksheets/sheet3.xml", self._sheet_xml(suggestion_sheet))
+            archive.writestr("xl/worksheets/sheet2.xml", self._sheet_xml(productos_sheet))
 
         return buffer.getvalue()
+
+    def _build_resumen_rows(
+        self,
+        invoices: Iterable[Invoice],
+        suggestions_map: dict[str, list[AISuggestion]],
+    ) -> Iterable[dict[str, object]]:
+        """
+        Combina datos de factura con sugerencias PUC seleccionadas.
+        Una fila por factura con su código PUC.
+        """
+        for invoice in invoices:
+            subtotal = invoice.total_amount - invoice.tax_amount
+            
+            # Buscar la sugerencia seleccionada para esta factura
+            suggestions = suggestions_map.get(invoice.id, [])
+            selected = next((s for s in suggestions if s.is_selected), None)
+            
+            yield {
+                "Factura interna": invoice.id,
+                "Consecutivo externo": invoice.external_id,
+                "Fecha": invoice.issue_date.isoformat(),
+                "Proveedor": invoice.supplier_name,
+                "NIT proveedor": invoice.supplier_tax_id,
+                "Cliente": invoice.customer_name,
+                "NIT cliente": invoice.customer_tax_id,
+                "Moneda": invoice.currency,
+                "Subtotal": float(subtotal),
+                "Impuestos": float(invoice.tax_amount),
+                "Total": float(invoice.total_amount),
+                "Código PUC": selected.account_code if selected else "",
+                "Justificación": selected.rationale if selected else "",
+                "Confianza": float(selected.confidence) if selected else 0.0,
+            }
 
     def _build_lines_rows(self, invoices: Iterable[Invoice]) -> Iterable[dict[str, object]]:
         for invoice in invoices:
@@ -167,26 +172,11 @@ class SpreadsheetInvoiceWorkbookBuilder:
                 yield {
                     "Factura interna": invoice.id,
                     "Consecutivo externo": invoice.external_id,
-                    "ID línea": line.line_id,
+                    "ID producto": line.line_id,
                     "Descripción": line.description,
                     "Cantidad": float(line.quantity),
                     "Precio unitario": float(line.unit_price),
                     "Subtotal": float(line.line_extension_amount),
-                }
-
-    def _build_suggestions_rows(
-        self,
-        invoices: Iterable[Invoice],
-        suggestions_map: dict[str, list[AISuggestion]],
-    ) -> Iterable[dict[str, object]]:
-        for invoice in invoices:
-            for suggestion in suggestions_map.get(invoice.id, []):
-                yield {
-                    "Factura interna": invoice.id,
-                    "Consecutivo externo": invoice.external_id,
-                    "Cuenta": suggestion.account_code,
-                    "Justificación": suggestion.rationale,
-                    "Confianza": float(suggestion.confidence),
                 }
 
     def _sheet_xml(self, rows: list[list[object]]) -> str:
@@ -220,7 +210,6 @@ class SpreadsheetInvoiceWorkbookBuilder:
             "<Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"
             "<Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
             "<Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
-            "<Override PartName=\"/xl/worksheets/sheet3.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
             "<Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/>"
             "<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>"
             "<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>"
@@ -241,8 +230,7 @@ class SpreadsheetInvoiceWorkbookBuilder:
             "<workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">"
             "<sheets>"
             "<sheet name=\"Resumen\" sheetId=\"1\" r:id=\"rId1\"/>"
-            "<sheet name=\"Lineas\" sheetId=\"2\" r:id=\"rId2\"/>"
-            "<sheet name=\"Asientos\" sheetId=\"3\" r:id=\"rId3\"/>"
+            "<sheet name=\"Productos\" sheetId=\"2\" r:id=\"rId2\"/>"
             "</sheets>"
             "</workbook>"
         )
@@ -253,8 +241,7 @@ class SpreadsheetInvoiceWorkbookBuilder:
             "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
             "<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/>"
             "<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/>"
-            "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet3.xml\"/>"
-            "<Relationship Id=\"rId4\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
+            "<Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>"
             "</Relationships>"
         )
 

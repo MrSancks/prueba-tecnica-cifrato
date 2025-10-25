@@ -1,6 +1,6 @@
 from io import BytesIO
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from app.application.use_cases.invoices import (
@@ -40,8 +40,10 @@ async def list_invoices(
 @router.post("/upload", response_model=InvoiceDetailResponse, status_code=status.HTTP_201_CREATED)
 async def upload_invoice(
     current_user: AuthenticatedUser,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     use_case=Depends(get_upload_invoice_use_case),
+    generate_suggestions_use_case: GenerateAccountingSuggestions = Depends(get_generate_accounting_suggestions_use_case),
 ):
     if file.content_type not in {"application/xml", "text/xml"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo se permiten archivos XML")
@@ -58,6 +60,13 @@ async def upload_invoice(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except InvoiceAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    # Disparar generación de sugerencias en segundo plano
+    background_tasks.add_task(
+        generate_suggestions_use_case.execute,
+        owner_id=current_user.id,
+        invoice_id=invoice.id,
+    )
 
     return InvoiceDetailResponse.from_domain(invoice, status="pendiente")
 
@@ -82,17 +91,69 @@ async def export_invoices(
 
 
 @router.get("/{invoice_id}/suggest", response_model=AccountingSuggestionsResponse)
-async def suggest_accounts(
+async def get_suggestions(
+    invoice_id: str,
+    current_user: AuthenticatedUser,
+    detail_use_case=Depends(get_invoice_detail_use_case),
+) -> AccountingSuggestionsResponse:
+    """
+    Obtiene las sugerencias existentes SIN regenerarlas.
+    Si no hay sugerencias, retorna lista vacía.
+    """
+    try:
+        detail = detail_use_case.execute(owner_id=current_user.id, invoice_id=invoice_id)
+    except InvoiceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    
+    # GetInvoiceDetail ya carga las sugerencias del repositorio
+    from app.config.dependencies import get_ai_suggestion_repository
+    suggestion_repo = get_ai_suggestion_repository()
+    suggestions = suggestion_repo.list_for_invoice(invoice_id)
+    
+    return AccountingSuggestionsResponse.from_domain(invoice_id=invoice_id, suggestions=suggestions)
+
+
+@router.post("/{invoice_id}/suggest", response_model=AccountingSuggestionsResponse)
+async def regenerate_suggestions(
     invoice_id: str,
     current_user: AuthenticatedUser,
     use_case: GenerateAccountingSuggestions = Depends(get_generate_accounting_suggestions_use_case),
 ) -> AccountingSuggestionsResponse:
+    """
+    REGENERA las sugerencias contables usando IA.
+    Usar este endpoint cuando el usuario haga clic en "Recalcular".
+    """
     try:
         suggestions = use_case.execute(owner_id=current_user.id, invoice_id=invoice_id)
     except InvoiceNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return AccountingSuggestionsResponse.from_domain(invoice_id=invoice_id, suggestions=suggestions)
+
+
+@router.put("/{invoice_id}/suggest/{line_number}/select")
+async def select_suggestion(
+    invoice_id: str,
+    line_number: int,
+    account_code: str,
+    current_user: AuthenticatedUser,
+    detail_use_case=Depends(get_invoice_detail_use_case),
+):
+    """
+    Marca una sugerencia específica como seleccionada por el usuario.
+    """
+    try:
+        # Verificar que la factura existe y pertenece al usuario
+        detail_use_case.execute(owner_id=current_user.id, invoice_id=invoice_id)
+    except InvoiceNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    
+    # Actualizar selección
+    from app.config.dependencies import get_ai_suggestion_repository
+    suggestion_repo = get_ai_suggestion_repository()
+    suggestion_repo.select_suggestion(invoice_id, line_number, account_code)
+    
+    return {"status": "ok", "message": "Sugerencia seleccionada exitosamente"}
 
 
 @router.get("/{invoice_id}", response_model=InvoiceDetailResponse)

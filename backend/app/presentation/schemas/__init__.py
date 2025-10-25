@@ -1,10 +1,5 @@
 from .auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
-from .invoices import (
-    AISuggestionResponse,
-    AccountingSuggestionsResponse,
-    InvoiceLineResponse,
-    InvoiceResponse,
-)
+from .invoices import AISuggestionResponse, AccountingSuggestionsResponse, InvoiceLineResponse
 
 __all__ = [
     "LoginRequest",
@@ -14,5 +9,4 @@ __all__ = [
     "AISuggestionResponse",
     "AccountingSuggestionsResponse",
     "InvoiceLineResponse",
-    "InvoiceResponse",
 ]

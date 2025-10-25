@@ -1,2 +1,0 @@
-class JWTError(Exception):
-    pass

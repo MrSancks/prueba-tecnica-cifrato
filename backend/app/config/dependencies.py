@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+
+logger = logging.getLogger(__name__)
 
 from app.application.use_cases import (
     AuthenticateUser,
@@ -16,54 +19,52 @@ from app.application.use_cases import (
 from app.infrastructure import (
     BcryptPasswordHasher,
     FirebaseAdminUnavailable,
-    InMemoryAISuggestionRepository,
-    InMemoryInvoiceRepository,
-    InMemoryUserRepository,
     JWTTokenService,
-    OllamaAISuggestionService,
+    GeminiAISuggestionService,
     SpreadsheetInvoiceWorkbookBuilder,
     UBLInvoiceParser,
     firebase_project_id,
     initialize_firebase_app,
 )
+from app.infrastructure.repositories.firestore_users import FirestoreUserRepository
+from app.infrastructure.repositories.firestore_invoices import FirestoreInvoiceRepository
+from app.infrastructure.repositories.firestore_suggestions import FirestoreAISuggestionRepository
 
 
 @dataclass(slots=True)
 class Settings:
     secret_key: str
     token_expire_minutes: int
-    ai_base_url: str
-    ai_model: str
     firebase_credentials_defined: bool
+    gemini_api_key: str | None
 
 
 @lru_cache
 def get_settings() -> Settings:
-    firebase_credentials_defined = bool(
-        os.getenv("FIREBASE_CREDENTIALS_PATH") or os.getenv("FIREBASE_CREDENTIALS_JSON")
-    )
+    # Use only FIREBASE_CREDENTIALS_JSON; do not consider FIREBASE_CREDENTIALS_PATH
+    firebase_credentials_defined = bool(os.getenv("FIREBASE_CREDENTIALS_JSON"))
+    
     return Settings(
         secret_key=os.getenv("SECRET_KEY", "insecure-development-secret"),
         token_expire_minutes=int(os.getenv("TOKEN_EXPIRE_MINUTES", "60")),
-        ai_base_url=os.getenv("AI_BASE_URL", "http://ollama:11434"),
-        ai_model=os.getenv("AI_MODEL", "phi3"),
         firebase_credentials_defined=firebase_credentials_defined,
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
     )
 
 
 @lru_cache
-def get_user_repository() -> InMemoryUserRepository:
-    return InMemoryUserRepository()
+def get_user_repository() -> FirestoreUserRepository:
+    return FirestoreUserRepository()
 
 
 @lru_cache
-def get_invoice_repository() -> InMemoryInvoiceRepository:
-    return InMemoryInvoiceRepository()
+def get_invoice_repository() -> FirestoreInvoiceRepository:
+    return FirestoreInvoiceRepository()
 
 
 @lru_cache
-def get_ai_suggestion_repository() -> InMemoryAISuggestionRepository:
-    return InMemoryAISuggestionRepository()
+def get_ai_suggestion_repository() -> FirestoreAISuggestionRepository:
+    return FirestoreAISuggestionRepository()
 
 
 @lru_cache
@@ -86,17 +87,37 @@ def get_invoice_parser() -> UBLInvoiceParser:
 
 
 @lru_cache
-def get_ai_suggestion_service() -> OllamaAISuggestionService:
+def get_ai_suggestion_service() -> GeminiAISuggestionService:
+    """
+    Factory que retorna el servicio de AI Gemini.
+    Requiere GEMINI_API_KEY en el entorno.
+    """
     settings = get_settings()
-    return OllamaAISuggestionService(
-        base_url=settings.ai_base_url,
-        model=settings.ai_model,
-    )
+    
+    api_key = settings.gemini_api_key
+    
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY no está configurado en las variables de entorno"
+        )
+    
+    return GeminiAISuggestionService(api_key=api_key)
 
 
 @lru_cache
 def get_invoice_workbook_builder() -> SpreadsheetInvoiceWorkbookBuilder:
-    return SpreadsheetInvoiceWorkbookBuilder()
+    settings = get_settings()
+    
+    # Crear generador de catálogo PUC si hay API key
+    puc_generator = None
+    if settings.gemini_api_key:
+        try:
+            from app.infrastructure.services.puc_catalog import PUCCatalogGenerator
+            puc_generator = PUCCatalogGenerator(api_key=settings.gemini_api_key)
+        except Exception as e:
+            logger.warning(f"No se pudo inicializar PUCCatalogGenerator: {e}")
+    
+    return SpreadsheetInvoiceWorkbookBuilder(puc_catalog_generator=puc_generator)
 
 
 @lru_cache
